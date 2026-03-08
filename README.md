@@ -78,3 +78,154 @@ Create a new graphical theme or develop a new plugin or integration and sell it 
 ### Contribute ###
 
 As a free and open-source project, we are very grateful to everyone who helps us to develop nopCommerce. Please find more details about the options and bonuses for contributors at [contribute page](https://www.nopcommerce.com/contribute?utm_source=github&utm_medium=referral&utm_campaign=contribute&utm_content=text).
+
+
+### Architecture Analysis (Before Instrumentation)
+
+## Architecture Analysis – Layer Organisation and Dependencies
+
+The nopCommerce architecture follows a **layered structure** where responsibilities are separated across several projects. Each layer depends only on specific lower layers, forming a mostly unidirectional dependency flow.
+
+### Layer Structure
+
+The main layers are organised as follows:
+
+- **Core**
+- **Data**
+- **Services**
+- **Web (Presentation)**
+
+Dependency direction:
+
+(as de cima consomem as de baixo)
+Web / Web.Framework
+      ↓
+   Services
+      ↓
+     Data
+      ↓
+     Core
+
+
+Core: não depende de outras camadas (“Core nada”).
+
+Data → Core: a camada de persistência depende do Core (entidades/contratos/base types).
+    <ProjectReference Include="..\Nop.Core\Nop.Core.csproj" />
+
+Services → Data, Core: a camada de negócio usa o Core e acessa persistência via Data.
+
+Web (Presentation) → Services, Data, Core (+ Web Framework): o entrypoint web referencia Services para lógica de negócio e também tem dependências diretas com Data/Core.
+
+Web.Framework / Web.Framework.Services → Services, Data, Core: componentes do framework UI e serviços auxiliares também dependem das camadas internas.
+
+Note:
+
+In a typical layered architecture, the Web layer would depend only on the Services layer, which would then access the Data layer. However, in nopCommerce the Web project also references the Data project directly. This means that some requests may access the data layer without passing through the service layer.
+From an observability perspective, this requires instrumentation not only in the service layer but also at the HTTP entry point and database access level to ensure complete traces.
+
+
+(examples is missing, exemplo de cada dependencia de codigo)
+----------------------
+
+## IEventPublisher
+
+`IEventPublisher` é o contrato que o nopCommerce usa para publicar eventos internos da aplicação.
+
+```csharp
+public partial interface IEventPublisher
+{
+    Task PublishAsync<TEvent>(TEvent @event);
+}
+```
+
+### O que isto significa
+
+- `partial`: permite dividir a interface em vários ficheiros, mas neste projeto ela está apenas neste ficheiro.
+- `Task`: o método é assíncrono.
+- `PublishAsync<TEvent>`: publica um evento do tipo `TEvent`.
+- `@event`: instância concreta do evento a publicar.
+
+### Como o nopCommerce processa os eventos internamente
+
+A implementação está em `EventPublisher`. Quando `PublishAsync` é chamado, o nopCommerce:
+
+1. Resolve no DI todos os `IConsumer<TEvent>` registados para aquele evento.
+2. Executa os consumers de forma sequencial (`await`).
+3. Se um consumer falhar, faz log da exceção e continua para o próximo.
+4. Se o evento implementar `IStopProcessingEvent` e `StopProcessing = true`, interrompe o pipeline.
+
+```csharp
+public virtual async Task PublishAsync<TEvent>(TEvent @event)
+{
+    var consumers = EngineContext.Current.ResolveAll<IConsumer<TEvent>>().ToList();
+
+    foreach (var consumer in consumers)
+    {
+        try
+        {
+            await consumer.HandleEventAsync(@event);
+
+            if (@event is IStopProcessingEvent { StopProcessing: true })
+                break;
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                var logger = EngineContext.Current.Resolve<ILogger>();
+                if (logger == null)
+                    return;
+
+                await logger.ErrorAsync(exception.Message, exception);
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+    }
+}
+```
+
+### Como o DI entra neste fluxo
+
+O DI (Dependency Injection) é o contentor que sabe:
+
+- que implementação usar para cada interface;
+- como criar objetos e respetivas dependências;
+- que consumers existem para cada tipo de evento.
+
+No startup, o nopCommerce regista o publisher e faz scan automático dos consumers:
+
+```csharp
+services.AddSingleton<IEventPublisher, EventPublisher>();
+
+var consumers = typeFinder.FindClassesOfType(typeof(IConsumer<>)).ToList();
+foreach (var consumer in consumers)
+foreach (var findInterface in consumer.FindInterfaces((type, criteria) =>
+         {
+             var isMatch = type.IsGenericType &&
+                           ((Type)criteria).IsAssignableFrom(type.GetGenericTypeDefinition());
+             return isMatch;
+         }, typeof(IConsumer<>)))
+    services.AddScoped(findInterface, consumer);
+```
+
+Assim, quando um evento é publicado, os consumers certos já estão registados e são executados automaticamente. (HandleEventAsync)
+
+### Exemplos de eventos publicados no nopCommerce
+
+```csharp
+await _eventPublisher.PublishAsync(new AdminMenuCreatedEvent(this, root));
+await eventPublisher.PublishAsync(new AppStartedEvent());
+```
+
+### Resumo
+
+`IEventPublisher` desacopla quem publica de quem consome:
+
+- quem publica só dispara o evento;
+- quem consome implementa `IConsumer<TEvent>`;
+- o DI liga tudo automaticamente.
+
+
