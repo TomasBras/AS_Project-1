@@ -229,3 +229,41 @@ await eventPublisher.PublishAsync(new AppStartedEvent());
 - o DI liga tudo automaticamente.
 
 
+## Easy To Add Observability
+
+### Easy Places (Good observability hooks)
+
+- HTTP pipeline is centralized, so one middleware can capture request/response timing, status, and correlation IDs for almost everything web-facing.  
+  `ApplicationBuilderExtensions.cs`
+- Error handling is already centralized (exceptions, 400, 404), so logging and trace enrichment can be standardized there.  
+  `ErrorHandlerStartup.cs`
+- Event publishing is centralized in one dispatcher, so you can instrument event fan-out once (event type, consumer count, failures, duration).  
+  `EventPublisher.cs`
+- Repository CRUD is centralized in `EntityRepository`, so DB-level business operations can be traced from one place.  
+  `EntityRepository.cs`
+
+### Hard Places (Observability gaps)
+
+- `EngineContext.Current.Resolve(...)` (service locator style) hides dependency flow, making spans and causality harder to reason about.  
+  `NopEngine.cs`
+- Dynamic plugin/event discovery means behavior is runtime-composed; hard to know all handlers statically.  
+  `NopStartup.cs`
+- Non-HTTP flows (scheduled tasks) bypass HTTP middleware, so you need separate instrumentation paths.  
+  `TaskScheduler.cs`
+- Static file and some middleware short-circuit paths bypass controllers/services, so controller-level telemetry alone is incomplete.  
+  `ApplicationBuilderExtensions.cs`
+
+### Structural Changes Needed For Proper Instrumentation
+
+- Add OpenTelemetry `ActivitySource` at 4 choke points: HTTP middleware, event publisher, repository operations, schedule task runner.
+- Standardize correlation context propagation across HTTP, events, and background jobs.
+- Gradually reduce new uses of service locator and prefer constructor DI in touched code paths.
+- Define a telemetry contract (span names, tags, error semantics) so plugins/core emit consistent signals.
+
+### Is It Worth Making These Changes?
+
+Yes.
+
+High-value, low-risk first phase is absolutely worth it: instrument centralized choke points without large refactors.
+
+Full architectural cleanup (removing service locator broadly) is also valuable, but should be incremental and justified by long-term maintenance and diagnostic needs.
