@@ -267,3 +267,21 @@ Yes.
 High-value, low-risk first phase is absolutely worth it: instrument centralized choke points without large refactors.
 
 Full architectural cleanup (removing service locator broadly) is also valuable, but should be incremental and justified by long-term maintenance and diagnostic needs.
+
+
+## User Flow Selected
+
+Customer places an order
+
+### Why??
+
+- É o fluxo com maior impacto de negócio e maior risco operacional.
+- Se o catálogo estiver lento, o cliente ainda pode esperar; se o pagamento falhar, a venda perde-se.
+- Permite detetar degradação antes de falhas visíveis (timeouts, retries, gateway errors).
+- Tem uma cadeia técnica mais complexa:
+  frontend de checkout, validações, criação de order, comunicação com gateway externo e atualização de estado.
+- Quanto mais etapas existem, maior a probabilidade de falha e maior o valor de observabilidade ponta a ponta.
+- Depende de terceiros (ex.: PayPal/Stripe), por isso a telemetria é essencial para distinguir:
+  falha no nosso código, problema de rede ou indisponibilidade do provider.
+- A latência é crítica: mesmo sem erro, checkout lento aumenta abandono.
+- Por isso este fluxo deve ser observado com métricas de percentis (p95/p99), e não apenas com taxa de erro.
