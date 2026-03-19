@@ -204,3 +204,84 @@ Customer places an order
   falha no nosso código, problema de rede ou indisponibilidade do provider.
 - A latência é crítica: mesmo sem erro, checkout lento aumenta abandono.
 - Por isso este fluxo deve ser observado com métricas de percentis (p95/p99), e não apenas com taxa de erro.
+
+## Flow that allows
+
+password: arquiteurasoftware
+
+```mermaid
+flowchart LR
+  A["CheckoutController OpcConfirmOrder"] --> B["IShoppingCartService GetShoppingCartAsync"]
+  B --> C["IOrderProcessingService GetProcessPaymentRequestAsync"]
+  C --> D["IOrderProcessingService PlaceOrderAsync"]
+
+  D --> E{PaymentMethodType}
+
+  E -->|Redirection| F["CheckoutController OpcCompleteRedirectionPayment"]
+  F --> G["IPaymentService PostProcessPaymentAsync"]
+
+  E -->|Non-Redirection| H["IPaymentService PostProcessPaymentAsync or direct success"]
+
+  G --> I["CheckoutController Completed orderId"]
+  H --> I
+```
+
+
+## Metrics
+
+### 1) Checkout Throughput (5m)
+**Description:** Number of checkout attempts in the last 5 minutes, split by result (`success`, `failed`, etc.).
+
+```promql
+sum by (result) (increase(checkout_attempts_total[5m]))
+```
+
+### 2) Checkout Error Rate (5m)
+**Description:** Percentage of checkout attempts that failed in the last 5 minutes.
+
+```promql
+sum(increase(checkout_attempts_total{result!="success"}[5m])) / sum(increase(checkout_attempts_total[5m]))
+```
+
+### 3) Checkout p95 Duration (5m)
+**Description:** p95 latency of checkout confirmation flow. Detects degradation before visible failures.
+
+```promql
+histogram_quantile(0.95, sum(rate(checkout_duration_seconds_bucket[5m])) by (le))
+```
+
+### 4) Checkout Average Duration (5m)
+**Description:** Average checkout confirmation latency trend over the last 5 minutes.
+
+```promql
+sum(rate(checkout_duration_seconds_sum[5m])) / sum(rate(checkout_duration_seconds_count[5m]))
+```
+
+### 5) Payment Attempts by Provider/Method/Result (5m)
+**Description:** Number of payment attempts in the last 5 minutes, split by provider, payment method type, and result.
+
+```promql
+sum by (provider, method, result) (increase(payment_attempts_total[5m]))
+```
+
+### 6) Payment p95 Latency by Provider (5m)
+**Description:** p95 payment processing latency by provider. Useful to detect gateway-level degradation.
+
+```promql
+histogram_quantile(0.95, sum(rate(payment_latency_seconds_bucket[5m])) by (le, provider))
+```
+
+### 7) Payment Failures by Reason (5m)
+**Description:** Payment failures in the last 5 minutes grouped by provider and normalized reason code.
+
+```promql
+sum by (provider, reason_code) (increase(payment_failures_total[5m]))
+```
+
+### 8) Checkout Drop-off at Confirm Step (5m)
+**Description:** Checkout drop-offs at confirm order step, grouped by reason code.
+
+```promql
+sum by (step, reason_code) (increase(checkout_step_dropoff_total[5m]))
+```
+
