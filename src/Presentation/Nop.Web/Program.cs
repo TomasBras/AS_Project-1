@@ -40,6 +40,7 @@ public partial class Program
                         !context.Request.Path.StartsWithSegments("/health", StringComparison.OrdinalIgnoreCase);
                 })
                 .AddHttpClientInstrumentation()
+                .AddSqlClientInstrumentation(options => options.RecordException = true)
                 .AddOtlpExporter(options => options.Endpoint = new Uri(otlpEndpoint)))
             .WithMetrics(metrics => metrics
                 .SetResourceBuilder(resourceBuilder)

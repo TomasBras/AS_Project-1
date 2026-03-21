@@ -37,6 +37,7 @@ using Nop.Web.Framework.Mvc;
 using Nop.Web.Framework.Mvc.Filters;
 using Nop.Web.Framework.Mvc.Routing;
 using Nop.Web.Infrastructure.Cache;
+using Nop.Web.Infrastructure.Observability;
 using Nop.Web.Models.Media;
 using Nop.Web.Models.ShoppingCart;
 
@@ -593,6 +594,13 @@ public partial class ShoppingCartController : BasePublicController
     public virtual async Task<IActionResult> AddProductToCart_Catalog(int productId, int shoppingCartTypeId,
         int quantity, bool forceredirection = false)
     {
+        static bool IsInventoryRelatedWarning(string warning) =>
+            !string.IsNullOrWhiteSpace(warning) &&
+            (warning.Contains("stock", StringComparison.OrdinalIgnoreCase) ||
+             warning.Contains("inventory", StringComparison.OrdinalIgnoreCase) ||
+             warning.Contains("estoque", StringComparison.OrdinalIgnoreCase) ||
+             warning.Contains("esgotado", StringComparison.OrdinalIgnoreCase));
+
         var cartType = (ShoppingCartType)shoppingCartTypeId;
 
         var product = await _productService.GetProductByIdAsync(productId);
@@ -669,12 +677,24 @@ public partial class ShoppingCartController : BasePublicController
         var shoppingCartItem = await _shoppingCartService.FindShoppingCartItemInTheCartAsync(cart, cartType, product);
         //if we already have the same product in the cart, then use the total quantity to validate
         var quantityToValidate = shoppingCartItem != null ? shoppingCartItem.Quantity + quantity : quantity;
+
+        //direct stock exhaustion signal for observability when add-to-cart exceeds available inventory
+        if (product.ManageInventoryMethod == ManageInventoryMethod.ManageStock &&
+            product.BackorderMode == BackorderMode.NoBackorders &&
+            product.StockQuantity < quantityToValidate)
+        {
+            CheckoutTelemetry.RecordInventoryFailure("opc", "stock_unavailable");
+        }
+
         var addToCartWarnings = await _shoppingCartService
             .GetShoppingCartItemWarningsAsync(customer, cartType,
                 product, store.Id, string.Empty,
                 decimal.Zero, null, null, quantityToValidate, false, shoppingCartItem?.Id ?? 0, true, false, false, false);
         if (addToCartWarnings.Any())
         {
+            if (addToCartWarnings.Any(IsInventoryRelatedWarning))
+                CheckoutTelemetry.RecordInventoryFailure("opc", "stock_unavailable");
+
             //cannot be added to the cart
             //let's display standard warnings
             return Json(new
@@ -693,6 +713,9 @@ public partial class ShoppingCartController : BasePublicController
             quantity: quantity);
         if (addToCartWarnings.Any())
         {
+            if (addToCartWarnings.Any(IsInventoryRelatedWarning))
+                CheckoutTelemetry.RecordInventoryFailure("opc", "stock_unavailable");
+
             //cannot be added to the cart
             //but we do not display attribute and gift card warnings here. let's do it on the product details page
             return Json(new { redirect = redirectUrl });

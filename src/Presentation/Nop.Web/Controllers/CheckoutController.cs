@@ -1289,6 +1289,16 @@ public partial class CheckoutController : BasePublicController
             CheckoutTelemetry.RecordDuration(seconds, "multistep", result, paymentMethodSystemName);
         }
 
+        static bool IsInventoryRelatedMessage(string message) =>
+            !string.IsNullOrWhiteSpace(message) &&
+            (message.Contains("stock", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("inventory", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("estoque", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("esgotado", StringComparison.OrdinalIgnoreCase));
+
+        static bool HasInventoryError(IEnumerable<string> errors) =>
+            errors.Any(IsInventoryRelatedMessage);
+
         //validation
         if (_orderSettings.CheckoutDisabled)
             return RedirectToRoute(NopRouteNames.General.CART);
@@ -1298,7 +1308,10 @@ public partial class CheckoutController : BasePublicController
         var cart = await _shoppingCartService.GetShoppingCartAsync(customer, ShoppingCartType.ShoppingCart, store.Id);
 
         if (!cart.Any())
+        {
+            CheckoutTelemetry.RecordBasketFailure("multistep", "empty_cart");
             return RedirectToRoute(NopRouteNames.General.CART);
+        }
 
         if (_orderSettings.OnePageCheckoutEnabled)
             return RedirectToRoute(NopRouteNames.Standard.CHECKOUT_ONE_PAGE);
@@ -1372,12 +1385,18 @@ public partial class CheckoutController : BasePublicController
                 model.Warnings.Add(error);
 
             RecordCheckoutMetrics("failed", "place_order");
+            if (HasInventoryError(placeOrderResult.Errors))
+                CheckoutTelemetry.RecordInventoryFailure("multistep", "stock_unavailable");
         }
         catch (Exception exc)
         {
             await _logger.WarningAsync(exc.Message, exc);
             model.Warnings.Add(exc.Message);
             RecordCheckoutMetrics("failed", "exception");
+            if (IsInventoryRelatedMessage(exc.Message))
+            {
+                CheckoutTelemetry.RecordInventoryFailure("multistep", "stock_exception");
+            }
         }
 
         //If we got this far, something failed, redisplay form
@@ -2056,6 +2075,16 @@ public partial class CheckoutController : BasePublicController
             CheckoutTelemetry.RecordStepDropoff("confirm_order", reasonCode);
         }
 
+        static bool IsInventoryRelatedMessage(string message) =>
+            !string.IsNullOrWhiteSpace(message) &&
+            (message.Contains("stock", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("inventory", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("estoque", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("esgotado", StringComparison.OrdinalIgnoreCase));
+
+        static bool HasInventoryError(IEnumerable<string> errors) =>
+            errors.Any(IsInventoryRelatedMessage);
+
         try
         {
             var customer = await _workContext.GetCurrentCustomerAsync();
@@ -2079,7 +2108,10 @@ public partial class CheckoutController : BasePublicController
                 var cart = await _shoppingCartService.GetShoppingCartAsync(customer, ShoppingCartType.ShoppingCart, store.Id);
 
                 if (!cart.Any())
+                {
+                    CheckoutTelemetry.RecordBasketFailure("opc", "empty_cart");
                     throw new Exception("Your cart is empty");
+                }
 
                 if (!_orderSettings.OnePageCheckoutEnabled)
                     throw new Exception("One page checkout is disabled");
@@ -2173,6 +2205,8 @@ public partial class CheckoutController : BasePublicController
 
                 RecordCheckoutMetrics("failed", "place_order");
                 RecordDropoff("place_order_failed");
+                if (HasInventoryError(placeOrderResult.Errors))
+                    CheckoutTelemetry.RecordInventoryFailure("opc", "stock_unavailable");
             }
             else
             {
@@ -2198,6 +2232,10 @@ public partial class CheckoutController : BasePublicController
             RecordDropoff("exception");
             if (!string.Equals(paymentMethodSystemName, "unknown", StringComparison.OrdinalIgnoreCase))
                 CheckoutTelemetry.RecordPaymentFailure(paymentMethodSystemName, paymentMethodType, "exception");
+            if (IsInventoryRelatedMessage(exc.Message))
+            {
+                CheckoutTelemetry.RecordInventoryFailure("opc", "stock_exception");
+            }
             return Json(new { error = 1, message = exc.Message });
         }
     }

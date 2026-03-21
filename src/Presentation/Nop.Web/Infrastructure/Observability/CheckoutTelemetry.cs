@@ -42,6 +42,16 @@ public static class CheckoutTelemetry
         unit: "{dropoff}",
         description: "Total number of checkout drop-offs by step and reason.");
 
+    private static readonly Counter<long> _basketCheckoutFailures = _meter.CreateCounter<long>(
+        name: "basket_checkout_failures_total",
+        unit: "{failure}",
+        description: "Total number of checkout failures caused by basket/cart issues.");
+
+    private static readonly Counter<long> _inventoryCheckoutFailures = _meter.CreateCounter<long>(
+        name: "inventory_checkout_failures_total",
+        unit: "{failure}",
+        description: "Total number of checkout failures caused by inventory/stock issues.");
+
     public static void RecordAttempt(string flow, string result, string paymentMethod = null, string errorType = null)
     {
         var tags = new TagList
@@ -118,5 +128,27 @@ public static class CheckoutTelemetry
         };
 
         _checkoutStepDropoff.Add(1, tags);
+    }
+
+    public static void RecordBasketFailure(string flow, string reasonCode)
+    {
+        var tags = new TagList
+        {
+            { "flow", flow ?? "unknown" },
+            { "reason_code", reasonCode ?? "unknown" }
+        };
+
+        _basketCheckoutFailures.Add(1, tags);
+    }
+
+    public static void RecordInventoryFailure(string flow, string reasonCode)
+    {
+        var tags = new TagList
+        {
+            { "flow", flow ?? "unknown" },
+            { "reason_code", reasonCode ?? "unknown" }
+        };
+
+        _inventoryCheckoutFailures.Add(1, tags);
     }
 }
