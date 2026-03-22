@@ -1,82 +1,177 @@
-﻿﻿nopCommerce: free and open-source eCommerce solution
-===========
+# Assignment 01 - Observability in the Wild
 
-[nopCommerce](https://www.nopcommerce.com/?utm_source=github&utm_medium=content&utm_campaign=homepage) is the best open-source eCommerce platform. nopCommerce is free, and it is the most popular ASP.NET Core shopping cart.
+OpenTelemetry instrumentation for nopCommerce, focused on the flow:
 
-![nopCommerce demo](https://www.nopcommerce.com/images/github/responsive_devices_codeplex.png#v1)
+**Customer places an order (Basket -> Order -> Payment -> Inventory)**.
 
-### Key features ###
+This repository contains:
+- architecture analysis: `ARCHITECTURE.md`
+- critique: `CRITIQUE.md`
+- load test script: `load-tests/checkout-opc.js`
+- observability stack: `opentelemetry-demo/docker-compose.observability.yml`
 
-* The product is being developed and supported by the professional team since 2008.
-* nopCommerce has been downloaded more than 3,000,000 times.
-* The active developer community has more than 250,000 members.
-* nopCommerce runs on .NET 9 with an MS SQL 2012 (or higher) backend database.
-* nopCommerce is cross-platform, and you can run it on Windows, Linux, or Mac.
-* nopCommerce supports Docker out of the box, so you can easily run nopCommerce on a Linux machine.
-* nopCommerce supports PostgreSQL and MySQL databases.
-* nopCommerce fully supports web farms. You can read more about it [here](https://docs.nopcommerce.com/en/developer/tutorials/web-farms.html?utm_source=github&utm_medium=referral&utm_campaign=documentation&utm_content=text).  
-* All methods in nopCommerce are async.
-* nopCommerce supports multi-factor authentication out of the box.
-* Start our [online course for developers](https://nopcommerce.com/training?utm_source=github&utm_medium=referral&utm_campaign=course&utm_content=text) and get the practical and technical skills you need to run and customize nopCommerce websites.
+---
 
-![Logo](https://www.nopcommerce.com/images/github/logos.png#v2)
+## 1) Prerequisites
 
-nopCommerce architecture follows well-known software patterns and the best security practices. The source code is fully customizable. Pluggable and clear architecture makes it easy to develop custom functionality and follow any business requirements.
+- Docker + Docker Compose
+- .NET SDK 9 (or local SDK path configured)
+- k6
+- SQL Server running for nopCommerce
 
-Using the latest Microsoft technologies, nopCommerce provides high performance, stability, and security. nopCommerce is also fully compatible with Azure and web farms.
+If using local .NET 9 SDK in home folder:
 
-Our clear and detailed [documentation](https://docs.nopcommerce.com/developer/index.html?utm_source=github&utm_medium=referral&utm_campaign=documentation&utm_content=text) and [online course](https://nopcommerce.com/training?utm_source=github&utm_medium=referral&utm_campaign=course&utm_content=text) for developers will help you start with nopCommerce easily.
+```bash
+export DOTNET_ROOT=/home/tomasbras/dotnet-sdk-9.0.312-linux-x64
+export PATH=$DOTNET_ROOT:$PATH
+```
 
+---
 
-### The advantages of working with nopCommerce ###
+## 2) Run Observability Stack
 
-nopCommerce offers powerful [out-of-the-box features](https://www.nopcommerce.com/features?utm_source=github&utm_medium=referral&utm_campaign=features&utm_content=text) for creating an online store of any size and type.
+```bash
+docker compose -f opentelemetry-demo/docker-compose.observability.yml up -d
+```
 
-nopCommerce is integrated with all the popular third-party services. You can find thousands of integrations on nopCommerce [Marketplace](https://www.nopcommerce.com/marketplace?utm_source=github&utm_medium=referral&utm_campaign=marketplace&utm_content=text).
+Endpoints:
+- Grafana: `http://localhost:3000`
+- Prometheus: `http://localhost:9090`
+- Jaeger: `http://localhost:16686`
+- OTEL Collector OTLP gRPC: `http://localhost:4317`
 
-The [Web API plugin](https://www.nopcommerce.com/web-api?utm_source=github&utm_medium=referral&utm_campaign=WebAPI&utm_content=text) by the nopCommerce team lets you build integrations with third-party services or mobile applications using REST. The Web API plugin is available with source code and covers all methods of nopCommerce: backend and frontend. You can read more about it [here](https://www.nopcommerce.com/web-api?utm_source=github&utm_medium=referral&utm_campaign=WebAPI&utm_content=text).
+---
 
-Friendly members of the [nopCommerce community](https://www.nopcommerce.com/boards?utm_source=github&utm_medium=referral&utm_campaign=forum&utm_content=text) will always help with advice and share their experiences. nopCommerce core development team provides [professional support](https://www.nopcommerce.com/nopcommerce-premium-support-services?utm_source=github&utm_medium=referral&utm_campaign=premium_support&utm_content=text) within 24 hours.
+## 3) Run SQL Server for nopCommerce
 
+nopCommerce in this repo is configured to use SQL Server at `localhost:1433` (`src/Presentation/Nop.Web/App_Data/appsettings.json`).
 
-## Store demo ##
+If you do not already have SQL Server running locally, start it with Docker:
 
-Evaluate the functionality and convenience of nopCommerce as a customer and store owner.
+```bash
+docker run -d \
+  --name nopcommerce_mssql_server \
+  -e ACCEPT_EULA=Y \
+  -e SA_PASSWORD='nopCommerce_db_password' \
+  -p 1433:1433 \
+  mcr.microsoft.com/mssql/server:2019-latest
+```
 
-Front End | Admin area
-----|------
-[![ScreenShot](https://www.nopcommerce.com/images/github/public-demo.png#v1)](https://demo.nopcommerce.com?utm_source=github&utm_medium=referral&utm_campaign=demo_store&utm_content=button) | [![ScreenShot](https://www.nopcommerce.com/images/github/admin-demo.png#v1)](https://admin-demo.nopcommerce.com/admin?utm_source=github&utm_medium=referral&utm_campaign=demo_store&utm_content=button)
+If the container already exists:
 
+```bash
+docker start nopcommerce_mssql_server
+```
 
-### nopCommerce resources ###
+Optional check:
 
-nopCommerce official site: [https://www.nopcommerce.com](https://www.nopcommerce.com/?utm_source=github&utm_medium=referral&utm_campaign=homepage&utm_content=links)
+```bash
+docker logs -f nopcommerce_mssql_server
+```
 
-* [Demo store](https://www.nopcommerce.com/demo?utm_source=github&utm_medium=referral&utm_campaign=demo_store&utm_content=links)
-* [Download nopCommerce](https://www.nopcommerce.com/download-nopcommerce?utm_source=github&utm_medium=referral&utm_campaign=download_nop&utm_content=links)
-* [Online course for developers](https://nopcommerce.com/training?utm_source=github&utm_medium=referral&utm_campaign=course&utm_content=links)
-* [Feature list](https://www.nopcommerce.com/features?utm_source=github&utm_medium=referral&utm_campaign=features&utm_content=links)
-* [Web API plugin](https://www.nopcommerce.com/web-api?utm_source=github&utm_medium=referral&utm_campaign=WebAPI&utm_content=links)
-* [nopCommerce documentation](https://docs.nopcommerce.com?utm_source=github&utm_medium=referral&utm_campaign=documentation&utm_content=links)
-* [Community forums](https://www.nopcommerce.com/boards?utm_source=github&utm_medium=referral&utm_campaign=forum&utm_content=links)
-* [Premium support services](https://www.nopcommerce.com/nopcommerce-premium-support-services?utm_source=github&utm_medium=referral&utm_campaign=premium_support&utm_content=links)
-* [Certified developer program](https://www.nopcommerce.com/certified-developer-program?utm_source=github&utm_medium=referral&utm_campaign=certified_developer&utm_content=links)
-* [nopCommerce partners](https://www.nopcommerce.com/partners?utm_source=github&utm_medium=referral&utm_campaign=solution_partners&utm_content=links)
+Wait until SQL Server reports it is ready for client connections.
 
-nopCommerce YouTube: [The Architecture behind the nopCommerce eCommerce Platform](https://www.youtube.com/watch?v=6gLbizzSA9o&list=PLnL_aDfmRHwtJmzeA7SxrpH3-XDY2ue0a)
+---
 
+## 4) Run nopCommerce with OpenTelemetry
 
-### Earn with nopCommerce ###
+From repository root:
 
-60,000 stores worldwide are powered by nopCommerce, and 10,000 new stores open every year. nopCommerce [solution partners’ directory](https://www.nopcommerce.com/partners?utm_source=github&utm_medium=referral&utm_campaign=solution_partners&utm_content=text_become_partner) gets 80,000+ page views per year from store owners who are looking for a partner to build a store from scratch, migrate from another platform, or improve and customize an existing store.
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \
+dotnet run --project src/Presentation/Nop.Web/Nop.Web.csproj
+```
 
-Become a solution partner of nopCommerce and get new clients – [learn more](https://www.nopcommerce.com/become-partner?utm_source=github&utm_medium=referral&utm_campaign=become-partner&utm_content=learn_more).
+Store URL:
+- `http://localhost:5000`
 
-Create a new graphical theme or develop a new plugin or integration and sell it on the nopCommerce [Marketplace](https://www.nopcommerce.com/marketplace?utm_source=github&utm_medium=referral&utm_campaign=marketplace&utm_content=text_sell_on_marketplace).
+---
 
+## 5) Selected Flow Diagram
 
-### Contribute ###
+```mermaid
+flowchart LR
+  A["HTTP POST /checkout/OpcConfirmOrder"] --> B["CheckoutController.OpcConfirmOrder"]
+  B --> C["IShoppingCartService.GetShoppingCartAsync (Basket)"]
+  C --> D["IOrderProcessingService.PlaceOrderAsync (Order)"]
+  D --> E{PaymentMethodType}
+  E -->|Redirection| F["CheckoutController.OpcCompleteRedirectionPayment"]
+  E -->|Non-Redirection| G["IPaymentService.PostProcessPaymentAsync"]
+  F --> G
+  D --> H["Inventory/stock validation"]
+  G --> I["Order success/failure response"]
+```
 
-As a free and open-source project, we are very grateful to everyone who helps us to develop nopCommerce. Please find more details about the options and bonuses for contributors at [contribute page](https://www.nopcommerce.com/contribute?utm_source=github&utm_medium=referral&utm_campaign=contribute&utm_content=text).
+---
 
+## 6) Run Load Test (k6)
 
+The script generates mixed scenarios (success + controlled failures) to populate checkout, payment, drop-off, basket, and inventory metrics.
+
+From repository root:
+
+```bash
+BASE_URL=http://localhost:5000 \
+EMAIL=admin@yourStore.com \
+PASSWORD='arquiteurasoftware' \
+PRODUCT_ID=1 \
+INVENTORY_QTY=2000 \
+k6 run load-tests/checkout-opc.js
+```
+
+Notes:
+- `PRODUCT_ID=0` tries to auto-discover a simple product from homepage.
+- For reproducible runs, set a known simple product ID explicitly.
+- For deterministic inventory failures, use a product with `Manage stock = true`, `Backorders = No backorders`, and low stock.
+
+---
+
+## 7) Dashboard Validation
+
+Keep Grafana open while k6 is running and use time range `Last 15 minutes`.
+
+Core checks in Prometheus:
+
+```promql
+sum by (result) (increase(checkout_attempts_total[5m]))
+```
+
+```promql
+sum(increase(checkout_attempts_total{result!="success"}[5m])) / sum(increase(checkout_attempts_total[5m]))
+```
+
+```promql
+histogram_quantile(0.95, sum(rate(checkout_duration_seconds_bucket[5m])) by (le))
+```
+
+```promql
+sum by (provider, method, result) (increase(payment_attempts_total[5m]))
+```
+
+```promql
+sum by (provider, reason_code) (increase(payment_failures_total[5m]))
+```
+
+Interpretation note for demo/evaluation: if payment queries return `0` (or payment panels show `No data`) while checkout/basket/inventory metrics are active, this is expected in this repository setup because checkout uses an offline/local payment path (no external gateway call).
+
+---
+
+## 8) Trace View (Jaeger)
+
+Open: `http://localhost:16686`
+
+Suggested filters:
+- Service: `nop.web`
+- Operation: `POST`
+- Lookback: `Last Hour`
+
+Then inspect traces around checkout requests and correlate with metric spikes.
+
+---
+
+## 9) Deliverables in Repo
+
+- `ARCHITECTURE.md` - architecture reading + metric rationale
+- `CRITIQUE.md` - architectural critique and surgical changes discussion
+- `load-tests/checkout-opc.js` - load generation for selected flow
+- observability compose/config under `opentelemetry-demo/`
