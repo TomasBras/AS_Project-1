@@ -2203,8 +2203,16 @@ public partial class CheckoutController : BasePublicController
                 foreach (var error in placeOrderResult.Errors)
                     confirmOrderModel.Warnings.Add(error);
 
+                var hasPaymentError = placeOrderResult.Errors.Any(error =>
+                    !string.IsNullOrWhiteSpace(error) &&
+                    (error.Contains("payment", StringComparison.OrdinalIgnoreCase) ||
+                     error.Contains("metodo de pagamento", StringComparison.OrdinalIgnoreCase) ||
+                     error.Contains("método de pagamento", StringComparison.OrdinalIgnoreCase)));
+
                 RecordCheckoutMetrics("failed", "place_order");
                 RecordDropoff("place_order_failed");
+                if (hasPaymentError)
+                    CheckoutTelemetry.RecordPaymentFailure(paymentMethodSystemName, paymentMethodType, "place_order_failed");
                 if (HasInventoryError(placeOrderResult.Errors))
                     CheckoutTelemetry.RecordInventoryFailure("opc", "stock_unavailable");
             }

@@ -130,7 +130,7 @@ From repository root:
 BASE_URL=http://localhost:5000 \
 EMAIL=admin@yourStore.com \
 PASSWORD='arquiteurasoftware' \
-PRODUCT_ID=1 \
+PRODUCT_ID=48 \
 INVENTORY_QTY=2000 \
 k6 run load-tests/checkout-opc.js
 ```
@@ -139,6 +139,19 @@ Notes:
 - `PRODUCT_ID=0` tries to auto-discover a simple product from homepage.
 - For reproducible runs, set a known simple product ID explicitly.
 - For deterministic inventory failures, use a product with `Manage stock = true`, `Backorders = No backorders`, and low stock.
+- `SCENARIO_PROFILE=demo-long` enables a longer run profile (higher duration and sustained traffic) for richer dashboard signal.
+
+Long-run example:
+
+```bash
+BASE_URL=http://localhost:5000 \
+EMAIL=admin@yourStore.com \
+PASSWORD='arquiteurasoftware' \
+PRODUCT_ID=48 \
+INVENTORY_QTY=5000 \
+SCENARIO_PROFILE=demo-long \
+k6 run load-tests/checkout-opc.js
+```
 
 ---
 
@@ -222,4 +235,3 @@ Then inspect checkout traces in Jaeger and correlate timestamps with Prometheus 
 ## 10) Grafana Screenshots
 
 Store demo evidence images in `artifacts/grafana-screenshots/`.
-
