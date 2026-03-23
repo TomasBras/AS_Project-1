@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using System.Diagnostics;
+using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
 using Nop.Core;
 using Nop.Core.Domain.Common;
@@ -23,6 +24,7 @@ using Nop.Services.Tax;
 using Nop.Web.Factories;
 using Nop.Web.Framework.Controllers;
 using Nop.Web.Framework.Mvc.Filters;
+using Nop.Web.Infrastructure.Observability;
 using Nop.Web.Models.Checkout;
 using Nop.Web.Models.Common;
 using ILogger = Nop.Services.Logging.ILogger;
@@ -1277,6 +1279,26 @@ public partial class CheckoutController : BasePublicController
     [HttpPost, ActionName("Confirm")]
     public virtual async Task<IActionResult> ConfirmOrder(bool captchaValid)
     {
+        var stopwatch = Stopwatch.StartNew();
+        var paymentMethodSystemName = "unknown";
+
+        void RecordCheckoutMetrics(string result, string errorType = null)
+        {
+            var seconds = stopwatch.Elapsed.TotalSeconds;
+            CheckoutTelemetry.RecordAttempt("multistep", result, paymentMethodSystemName, errorType);
+            CheckoutTelemetry.RecordDuration(seconds, "multistep", result, paymentMethodSystemName);
+        }
+
+        static bool IsInventoryRelatedMessage(string message) =>
+            !string.IsNullOrWhiteSpace(message) &&
+            (message.Contains("stock", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("inventory", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("estoque", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("esgotado", StringComparison.OrdinalIgnoreCase));
+
+        static bool HasInventoryError(IEnumerable<string> errors) =>
+            errors.Any(IsInventoryRelatedMessage);
+
         //validation
         if (_orderSettings.CheckoutDisabled)
             return RedirectToRoute(NopRouteNames.General.CART);
@@ -1286,7 +1308,10 @@ public partial class CheckoutController : BasePublicController
         var cart = await _shoppingCartService.GetShoppingCartAsync(customer, ShoppingCartType.ShoppingCart, store.Id);
 
         if (!cart.Any())
+        {
+            CheckoutTelemetry.RecordBasketFailure("multistep", "empty_cart");
             return RedirectToRoute(NopRouteNames.General.CART);
+        }
 
         if (_orderSettings.OnePageCheckoutEnabled)
             return RedirectToRoute(NopRouteNames.Standard.CHECKOUT_ONE_PAGE);
@@ -1304,6 +1329,7 @@ public partial class CheckoutController : BasePublicController
         if (isCaptchaSettingEnabled && !captchaValid)
         {
             model.Warnings.Add(await _localizationService.GetResourceAsync("Common.WrongCaptchaMessage"));
+            RecordCheckoutMetrics("failed", "captcha");
             return View(model);
         }
 
@@ -1319,7 +1345,10 @@ public partial class CheckoutController : BasePublicController
             {
                 //Check whether payment workflow is required
                 if (await _orderProcessingService.IsPaymentWorkflowRequiredAsync(cart))
+                {
+                    RecordCheckoutMetrics("failed", "missing_payment_info");
                     return RedirectToRoute(NopRouteNames.Standard.CHECKOUT_PAYMENT_INFO);
+                }
 
                 processPaymentRequest = new ProcessPaymentRequest();
             }
@@ -1328,6 +1357,7 @@ public partial class CheckoutController : BasePublicController
             processPaymentRequest.CustomerId = customer.Id;
             processPaymentRequest.PaymentMethodSystemName = await _genericAttributeService.GetAttributeAsync<string>(customer,
                 NopCustomerDefaults.SelectedPaymentMethodAttribute, store.Id);
+            paymentMethodSystemName = processPaymentRequest.PaymentMethodSystemName ?? "none";
             await _orderProcessingService.SetProcessPaymentRequestAsync(processPaymentRequest);
             var placeOrderResult = await _orderProcessingService.PlaceOrderAsync(processPaymentRequest);
             if (placeOrderResult.Success)
@@ -1343,19 +1373,30 @@ public partial class CheckoutController : BasePublicController
                 if (_webHelper.IsRequestBeingRedirected || _webHelper.IsPostBeingDone)
                 {
                     //redirection or POST has been done in PostProcessPayment
+                    RecordCheckoutMetrics("success");
                     return Empty;
                 }
 
+                RecordCheckoutMetrics("success");
                 return RedirectToRoute(NopRouteNames.Standard.CHECKOUT_COMPLETED, new { orderId = placeOrderResult.PlacedOrder.Id });
             }
 
             foreach (var error in placeOrderResult.Errors)
                 model.Warnings.Add(error);
+
+            RecordCheckoutMetrics("failed", "place_order");
+            if (HasInventoryError(placeOrderResult.Errors))
+                CheckoutTelemetry.RecordInventoryFailure("multistep", "stock_unavailable");
         }
         catch (Exception exc)
         {
             await _logger.WarningAsync(exc.Message, exc);
             model.Warnings.Add(exc.Message);
+            RecordCheckoutMetrics("failed", "exception");
+            if (IsInventoryRelatedMessage(exc.Message))
+            {
+                CheckoutTelemetry.RecordInventoryFailure("multistep", "stock_exception");
+            }
         }
 
         //If we got this far, something failed, redisplay form
@@ -2018,6 +2059,32 @@ public partial class CheckoutController : BasePublicController
     [HttpPost]
     public virtual async Task<IActionResult> OpcConfirmOrder(bool captchaValid)
     {
+        var stopwatch = Stopwatch.StartNew();
+        var paymentMethodSystemName = "unknown";
+        var paymentMethodType = "unknown";
+
+        void RecordCheckoutMetrics(string result, string errorType = null)
+        {
+            var seconds = stopwatch.Elapsed.TotalSeconds;
+            CheckoutTelemetry.RecordAttempt("opc", result, paymentMethodSystemName, errorType);
+            CheckoutTelemetry.RecordDuration(seconds, "opc", result, paymentMethodSystemName);
+        }
+
+        void RecordDropoff(string reasonCode)
+        {
+            CheckoutTelemetry.RecordStepDropoff("confirm_order", reasonCode);
+        }
+
+        static bool IsInventoryRelatedMessage(string message) =>
+            !string.IsNullOrWhiteSpace(message) &&
+            (message.Contains("stock", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("inventory", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("estoque", StringComparison.OrdinalIgnoreCase) ||
+             message.Contains("esgotado", StringComparison.OrdinalIgnoreCase));
+
+        static bool HasInventoryError(IEnumerable<string> errors) =>
+            errors.Any(IsInventoryRelatedMessage);
+
         try
         {
             var customer = await _workContext.GetCurrentCustomerAsync();
@@ -2041,7 +2108,10 @@ public partial class CheckoutController : BasePublicController
                 var cart = await _shoppingCartService.GetShoppingCartAsync(customer, ShoppingCartType.ShoppingCart, store.Id);
 
                 if (!cart.Any())
+                {
+                    CheckoutTelemetry.RecordBasketFailure("opc", "empty_cart");
                     throw new Exception("Your cart is empty");
+                }
 
                 if (!_orderSettings.OnePageCheckoutEnabled)
                     throw new Exception("One page checkout is disabled");
@@ -2068,6 +2138,7 @@ public partial class CheckoutController : BasePublicController
                 processPaymentRequest.CustomerId = customer.Id;
                 processPaymentRequest.PaymentMethodSystemName = await _genericAttributeService.GetAttributeAsync<string>(customer,
                     NopCustomerDefaults.SelectedPaymentMethodAttribute, store.Id);
+                paymentMethodSystemName = processPaymentRequest.PaymentMethodSystemName ?? "none";
                 await _orderProcessingService.SetProcessPaymentRequestAsync(processPaymentRequest);
                 var placeOrderResult = await _orderProcessingService.PlaceOrderAsync(processPaymentRequest);
                 if (placeOrderResult.Success)
@@ -2083,7 +2154,13 @@ public partial class CheckoutController : BasePublicController
                     if (paymentMethod == null)
                         //payment method could be null if order total is 0
                         //success
+                    {
+                        CheckoutTelemetry.RecordPaymentAttempt("none", "none", "not_required");
+                        RecordCheckoutMetrics("success");
                         return Json(new { success = 1 });
+                    }
+
+                    paymentMethodType = paymentMethod.PaymentMethodType.ToString();
 
                     if (paymentMethod.PaymentMethodType == PaymentMethodType.Redirection)
                     {
@@ -2091,23 +2168,60 @@ public partial class CheckoutController : BasePublicController
                         //That's why we don't process it here (we redirect a user to another page where he'll be redirected)
 
                         //redirect
+                        CheckoutTelemetry.RecordPaymentAttempt(paymentMethodSystemName, paymentMethodType, "redirect");
+                        RecordCheckoutMetrics("success");
                         return Json(new
                         {
                             redirect = $"{_webHelper.GetStoreLocation()}checkout/OpcCompleteRedirectionPayment"
                         });
                     }
 
-                    await _paymentService.PostProcessPaymentAsync(postProcessPaymentRequest);
+                    var paymentStopwatch = Stopwatch.StartNew();
+                    CheckoutTelemetry.RecordPaymentAttempt(paymentMethodSystemName, paymentMethodType, "attempt");
+
+                    try
+                    {
+                        await _paymentService.PostProcessPaymentAsync(postProcessPaymentRequest);
+                        CheckoutTelemetry.RecordPaymentLatency(paymentStopwatch.Elapsed.TotalSeconds, paymentMethodSystemName, paymentMethodType, "success");
+                        CheckoutTelemetry.RecordPaymentAttempt(paymentMethodSystemName, paymentMethodType, "success");
+                    }
+                    catch
+                    {
+                        CheckoutTelemetry.RecordPaymentLatency(paymentStopwatch.Elapsed.TotalSeconds, paymentMethodSystemName, paymentMethodType, "failed");
+                        CheckoutTelemetry.RecordPaymentFailure(paymentMethodSystemName, paymentMethodType, "post_process_exception");
+                        CheckoutTelemetry.RecordPaymentAttempt(paymentMethodSystemName, paymentMethodType, "failed");
+                        RecordDropoff("payment_exception");
+                        throw;
+                    }
+
                     //success
+                    RecordCheckoutMetrics("success");
                     return Json(new { success = 1 });
                 }
 
                 //error
                 foreach (var error in placeOrderResult.Errors)
                     confirmOrderModel.Warnings.Add(error);
+
+                var hasPaymentError = placeOrderResult.Errors.Any(error =>
+                    !string.IsNullOrWhiteSpace(error) &&
+                    (error.Contains("payment", StringComparison.OrdinalIgnoreCase) ||
+                     error.Contains("metodo de pagamento", StringComparison.OrdinalIgnoreCase) ||
+                     error.Contains("método de pagamento", StringComparison.OrdinalIgnoreCase)));
+
+                RecordCheckoutMetrics("failed", "place_order");
+                RecordDropoff("place_order_failed");
+                if (hasPaymentError)
+                    CheckoutTelemetry.RecordPaymentFailure(paymentMethodSystemName, paymentMethodType, "place_order_failed");
+                if (HasInventoryError(placeOrderResult.Errors))
+                    CheckoutTelemetry.RecordInventoryFailure("opc", "stock_unavailable");
             }
             else
+            {
                 confirmOrderModel.Warnings.Add(await _localizationService.GetResourceAsync("Common.WrongCaptchaMessage"));
+                RecordCheckoutMetrics("failed", "captcha");
+                RecordDropoff("captcha");
+            }
 
             return Json(new
             {
@@ -2122,12 +2236,24 @@ public partial class CheckoutController : BasePublicController
         catch (Exception exc)
         {
             await _logger.WarningAsync(exc.Message, exc, await _workContext.GetCurrentCustomerAsync());
+            RecordCheckoutMetrics("failed", "exception");
+            RecordDropoff("exception");
+            if (!string.Equals(paymentMethodSystemName, "unknown", StringComparison.OrdinalIgnoreCase))
+                CheckoutTelemetry.RecordPaymentFailure(paymentMethodSystemName, paymentMethodType, "exception");
+            if (IsInventoryRelatedMessage(exc.Message))
+            {
+                CheckoutTelemetry.RecordInventoryFailure("opc", "stock_exception");
+            }
             return Json(new { error = 1, message = exc.Message });
         }
     }
 
     public virtual async Task<IActionResult> OpcCompleteRedirectionPayment()
     {
+        var paymentProvider = "unknown";
+        var paymentMethod = "unknown";
+        var paymentStopwatch = Stopwatch.StartNew();
+
         try
         {
             //validation
@@ -2145,12 +2271,15 @@ public partial class CheckoutController : BasePublicController
             if (order == null)
                 return RedirectToRoute(NopRouteNames.General.HOMEPAGE);
 
-            var paymentMethod = await _paymentPluginManager
+            var paymentPlugin = await _paymentPluginManager
                 .LoadPluginBySystemNameAsync(order.PaymentMethodSystemName, customer, store.Id);
-            if (paymentMethod == null)
+            if (paymentPlugin == null)
                 return RedirectToRoute(NopRouteNames.General.HOMEPAGE);
-            if (paymentMethod.PaymentMethodType != PaymentMethodType.Redirection)
+            if (paymentPlugin.PaymentMethodType != PaymentMethodType.Redirection)
                 return RedirectToRoute(NopRouteNames.General.HOMEPAGE);
+
+            paymentProvider = order.PaymentMethodSystemName ?? "unknown";
+            paymentMethod = paymentPlugin.PaymentMethodType.ToString();
 
             //ensure that order has been just placed
             if ((DateTime.UtcNow - order.CreatedOnUtc).TotalMinutes > 3)
@@ -2163,7 +2292,10 @@ public partial class CheckoutController : BasePublicController
                 Order = order
             };
 
+            CheckoutTelemetry.RecordPaymentAttempt(paymentProvider, paymentMethod, "attempt");
             await _paymentService.PostProcessPaymentAsync(postProcessPaymentRequest);
+            CheckoutTelemetry.RecordPaymentLatency(paymentStopwatch.Elapsed.TotalSeconds, paymentProvider, paymentMethod, "success");
+            CheckoutTelemetry.RecordPaymentAttempt(paymentProvider, paymentMethod, "success");
 
             if (_webHelper.IsRequestBeingRedirected || _webHelper.IsPostBeingDone)
             {
@@ -2178,6 +2310,9 @@ public partial class CheckoutController : BasePublicController
         catch (Exception exc)
         {
             await _logger.WarningAsync(exc.Message, exc, await _workContext.GetCurrentCustomerAsync());
+            CheckoutTelemetry.RecordPaymentLatency(paymentStopwatch.Elapsed.TotalSeconds, paymentProvider, paymentMethod, "failed");
+            CheckoutTelemetry.RecordPaymentFailure(paymentProvider, paymentMethod, "redirection_exception");
+            CheckoutTelemetry.RecordPaymentAttempt(paymentProvider, paymentMethod, "failed");
             return Content(exc.Message);
         }
     }
