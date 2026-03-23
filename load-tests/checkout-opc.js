@@ -10,6 +10,28 @@ const PRODUCT_ID = __ENV.PRODUCT_ID || '0';
 const INVENTORY_QTY = Number(__ENV.INVENTORY_QTY || '2000');
 const THINK_TIME_SECONDS = Number(__ENV.THINK_TIME_SECONDS || '0.5');
 const STOCK_KEYWORDS = ['stock', 'inventory', 'estoque', 'esgotado'];
+const SCENARIO_PROFILE = __ENV.SCENARIO_PROFILE || 'default';
+
+const SUCCESS_STAGE_1_DURATION =
+  __ENV.SUCCESS_STAGE_1_DURATION || (SCENARIO_PROFILE === 'demo-long' ? '2m' : '30s');
+const SUCCESS_STAGE_1_TARGET = Number(
+  __ENV.SUCCESS_STAGE_1_TARGET || (SCENARIO_PROFILE === 'demo-long' ? '4' : '2')
+);
+const SUCCESS_STAGE_2_DURATION =
+  __ENV.SUCCESS_STAGE_2_DURATION || (SCENARIO_PROFILE === 'demo-long' ? '10m' : '90s');
+const SUCCESS_STAGE_2_TARGET = Number(
+  __ENV.SUCCESS_STAGE_2_TARGET || (SCENARIO_PROFILE === 'demo-long' ? '12' : '6')
+);
+const SUCCESS_STAGE_3_DURATION =
+  __ENV.SUCCESS_STAGE_3_DURATION || (SCENARIO_PROFILE === 'demo-long' ? '2m' : '30s');
+const SUCCESS_STAGE_3_TARGET = Number(__ENV.SUCCESS_STAGE_3_TARGET || '0');
+
+const FAILURE_DURATION = __ENV.FAILURE_DURATION || (SCENARIO_PROFILE === 'demo-long' ? '10m' : '2m');
+const BASKET_FAILURE_START_TIME = __ENV.BASKET_FAILURE_START_TIME || '5s';
+const PAYMENT_FAILURE_START_TIME = __ENV.PAYMENT_FAILURE_START_TIME || '10s';
+const INVENTORY_PRESSURE_START_TIME = __ENV.INVENTORY_PRESSURE_START_TIME || '15s';
+const INVENTORY_RACE_START_TIME =
+  __ENV.INVENTORY_RACE_START_TIME || (SCENARIO_PROFILE === 'demo-long' ? '90s' : '20s');
 
 export const options = {
   scenarios: {
@@ -18,9 +40,9 @@ export const options = {
       exec: 'scenarioSuccess',
       startVUs: 0,
       stages: [
-        { duration: '30s', target: 2 },
-        { duration: '90s', target: 6 },
-        { duration: '30s', target: 0 },
+        { duration: SUCCESS_STAGE_1_DURATION, target: SUCCESS_STAGE_1_TARGET },
+        { duration: SUCCESS_STAGE_2_DURATION, target: SUCCESS_STAGE_2_TARGET },
+        { duration: SUCCESS_STAGE_3_DURATION, target: SUCCESS_STAGE_3_TARGET },
       ],
       gracefulRampDown: '10s',
     },
@@ -28,22 +50,22 @@ export const options = {
       executor: 'constant-vus',
       exec: 'scenarioBasketFailure',
       vus: 1,
-      duration: '2m',
-      startTime: '5s',
+      duration: FAILURE_DURATION,
+      startTime: BASKET_FAILURE_START_TIME,
     },
     opc_payment_failure: {
       executor: 'constant-vus',
       exec: 'scenarioPaymentFailure',
       vus: 1,
-      duration: '2m',
-      startTime: '10s',
+      duration: FAILURE_DURATION,
+      startTime: PAYMENT_FAILURE_START_TIME,
     },
     opc_inventory_pressure: {
       executor: 'constant-vus',
       exec: 'scenarioInventoryPressure',
       vus: 1,
-      duration: '2m',
-      startTime: '15s',
+      duration: FAILURE_DURATION,
+      startTime: INVENTORY_PRESSURE_START_TIME,
     },
     opc_inventory_race: {
       executor: 'per-vu-iterations',
@@ -51,7 +73,7 @@ export const options = {
       vus: 2,
       iterations: 1,
       maxDuration: '2m',
-      startTime: '20s',
+      startTime: INVENTORY_RACE_START_TIME,
     },
   },
   thresholds: {
@@ -99,6 +121,23 @@ function hasInventoryFailureMessage(payload) {
     return message.some((m) => includesStockKeyword(m));
   }
   return includesStockKeyword(message);
+}
+
+function parseCartItemIds(html) {
+  const ids = [];
+  const seen = {};
+  const regex = /name="itemquantity(\d+)"/g;
+  let m = null;
+
+  while ((m = regex.exec(html || '')) !== null) {
+    const id = m[1];
+    if (!seen[id]) {
+      seen[id] = true;
+      ids.push(id);
+    }
+  }
+
+  return ids;
 }
 
 function checkoutEndpoint(path) {
@@ -189,6 +228,28 @@ function discoverCandidateProductIdsFromHome() {
   }
 
   return ids;
+}
+
+function clearShoppingCart() {
+  const cartPage = http.get(`${BASE_URL}/cart`);
+  check(cartPage, { 'cart page loaded': (r) => r.status === 200 });
+
+  const token = antiForgeryTokenFromHtml(cartPage.body);
+  const ids = parseCartItemIds(cartPage.body);
+  if (!token || ids.length === 0) return;
+
+  const payload = {
+    removefromcart: ids.join(','),
+    updatecart: 'updatecart',
+    __RequestVerificationToken: token,
+  };
+
+  ids.forEach((id) => {
+    payload[`itemquantity${id}`] = '0';
+  });
+
+  const updateRes = http.post(`${BASE_URL}/cart`, payload);
+  check(updateRes, { 'cart cleared update status ok': (r) => r.status === 200 });
 }
 
 function discoverInventoryPressureProductId(token) {
@@ -287,6 +348,7 @@ function opcConfirmOrder(token, captchaValid = true) {
 
 function executeSuccessfulFlow(productQty = 1, credentials = credentialsForCurrentVu()) {
   const loginToken = loginAndGetToken(credentials);
+  clearShoppingCart();
   const addToCartToken = fetchStoreAntiForgeryToken(loginToken);
   const productId = discoverOrUseProductId();
   const add = addProductToCart(addToCartToken, productId, productQty);
@@ -349,6 +411,7 @@ export function scenarioSuccess() {
 export function scenarioBasketFailure() {
   group('opc-basket-failure', function () {
     const loginToken = loginAndGetToken(credentialsForCurrentVu());
+    clearShoppingCart();
     const opc = openOpc(loginToken);
     const confirm = opcConfirmOrder(opc.token, true);
 
@@ -363,6 +426,7 @@ export function scenarioBasketFailure() {
 export function scenarioPaymentFailure() {
   group('opc-payment-failure', function () {
     const loginToken = loginAndGetToken(credentialsForCurrentVu());
+    clearShoppingCart();
     const addToCartToken = fetchStoreAntiForgeryToken(loginToken);
     const productId = discoverOrUseProductId();
     const add = addProductToCart(addToCartToken, productId, 1);

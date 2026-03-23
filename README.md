@@ -215,3 +215,11 @@ Then inspect checkout traces in Jaeger and correlate timestamps with Prometheus 
 - `CRITIQUE.md` - architectural critique and surgical changes discussion
 - `load-tests/checkout-opc.js` - load generation for selected flow
 - observability compose/config under `opentelemetry-demo/`
+- Grafana screenshots under `artifacts/grafana-screenshots/`
+
+---
+
+## 10) Grafana Screenshots
+
+Store demo evidence images in `artifacts/grafana-screenshots/`.
+
