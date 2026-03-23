@@ -102,6 +102,22 @@ flowchart LR
   G --> I["Order success/failure response"]
 ```
 
+## 5.1) Observability Architecture Diagram
+
+```mermaid
+flowchart LR
+  U["User / Browser"] --> W["Nop.Web (ASP.NET Core)"]
+  W --> S["Nop.Services (Checkout orchestration)"]
+  S --> D["Nop.Data / SQL Server"]
+
+  W -. "traces + metrics (OTLP)" .-> C["OpenTelemetry Collector :4317"]
+  C --> P["Prometheus"]
+  C --> J["Jaeger"]
+  P --> G["Grafana (dashboards)"]
+
+  LT["k6 load test"] --> W
+```
+
 ---
 
 ## 6) Run Load Test (k6)
