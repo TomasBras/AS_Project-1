@@ -135,37 +135,61 @@ Core checks in Prometheus:
 ```promql
 sum by (result) (increase(checkout_attempts_total[5m]))
 ```
+Shows checkout volume in the last 5 minutes split by outcome (`success` vs failure).
 
 ```promql
 sum(increase(checkout_attempts_total{result!="success"}[5m])) / sum(increase(checkout_attempts_total[5m]))
 ```
+Shows checkout error rate (failed checkouts / total checkouts) in the last 5 minutes.
 
 ```promql
 histogram_quantile(0.95, sum(rate(checkout_duration_seconds_bucket[5m])) by (le))
 ```
+Shows checkout p95 latency, useful to detect tail slowdown before broad failures.
 
 ```promql
 sum by (provider, method, result) (increase(payment_attempts_total[5m]))
 ```
+Shows payment attempts grouped by provider, method, and result in the last 5 minutes.
 
 ```promql
 sum by (provider, reason_code) (increase(payment_failures_total[5m]))
 ```
+Shows payment failures by normalized reason code in the last 5 minutes.
 
 Interpretation note for demo/evaluation: if payment queries return `0` (or payment panels show `No data`) while checkout/basket/inventory metrics are active, this is expected in this repository setup because checkout uses an offline/local payment path (no external gateway call).
 
 ---
 
-## 8) Trace View (Jaeger)
+## 8) Trace and Metrics View (Jaeger + Prometheus)
 
-Open: `http://localhost:16686`
+Open:
+- Jaeger: `http://localhost:16686`
+- Prometheus: `http://localhost:9090`
 
-Suggested filters:
+Suggested Jaeger filters:
 - Service: `nop.web`
 - Operation: `POST`
 - Lookback: `Last Hour`
 
-Then inspect traces around checkout requests and correlate with metric spikes.
+Suggested Prometheus checks:
+
+```promql
+sum by (result) (increase(checkout_attempts_total[5m]))
+```
+Shows checkout volume in the last 5 minutes split by outcome (`success` vs failure).
+
+```promql
+sum by (flow, reason_code) (increase(basket_checkout_failures_total[5m]))
+```
+Shows checkout failures caused by basket/cart issues in the last 5 minutes.
+
+```promql
+sum by (flow, reason_code) (increase(inventory_checkout_failures_total[5m]))
+```
+Shows checkout failures caused by inventory/stock constraints in the last 5 minutes.
+
+Then inspect checkout traces in Jaeger and correlate timestamps with Prometheus metric spikes.
 
 ---
 
