@@ -109,7 +109,7 @@ flowchart LR
 
 ## 5.1) Observability Architecture Diagram
 
-![Observability architecture](artifacts/architecture.png)
+![Observability architecture](assessment/diagrams/architecture.png)
 
 ---
 
@@ -262,12 +262,14 @@ Then inspect checkout traces in Jaeger and correlate timestamps with Prometheus 
 
 - `ARCHITECTURE.md` - architecture reading + metric rationale
 - `CRITIQUE.md` - architectural critique and surgical changes discussion
-- `load-tests/checkout-opc.js` - load generation for selected flow
+- `assessment/load-test/checkout-opc.js` - submitted load generation script for the selected flow
 - observability compose/config under `opentelemetry-demo/`
-- Grafana screenshots under `artifacts/grafana-screenshots/`
+- Grafana dashboard export under `assessment/grafana_export.json`
+- Grafana screenshots under `assessment/dashboards/`
+- presentation deck under `Presentation/Software Architectures.pdf`
 
 ---
 
 ## 10) Grafana Screenshots
 
-Store demo evidence images in `artifacts/grafana-screenshots/`.
+Store demo evidence images in `assessment/dashboards/`.
