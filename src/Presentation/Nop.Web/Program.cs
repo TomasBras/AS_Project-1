@@ -1,6 +1,7 @@
 ﻿using Autofac.Extensions.DependencyInjection;
 using Nop.Core.Configuration;
 using Nop.Core.Infrastructure;
+using Nop.Core.Observability;
 using Nop.Web.Infrastructure.Observability;
 using Nop.Web.Framework.Infrastructure.Extensions;
 using OpenTelemetry.Metrics;
@@ -39,8 +40,10 @@ public partial class Program
                     options.Filter = context =>
                         !context.Request.Path.StartsWithSegments("/health", StringComparison.OrdinalIgnoreCase);
                 })
+                .AddSource(NopTelemetry.ActivitySourceName)
                 .AddHttpClientInstrumentation()
                 .AddSqlClientInstrumentation(options => options.RecordException = true)
+                .AddProcessor(new SensitiveDataSanitizingProcessor())
                 .AddOtlpExporter(options => options.Endpoint = new Uri(otlpEndpoint)))
             .WithMetrics(metrics => metrics
                 .SetResourceBuilder(resourceBuilder)

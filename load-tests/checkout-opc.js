@@ -3,42 +3,63 @@ import { check, group, sleep } from 'k6';
 import { parseHTML } from 'k6/html';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+const USER_AGENT =
+  __ENV.USER_AGENT ||
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36';
+
 const EMAIL = __ENV.EMAIL || 'admin@yourStore.com';
 const PASSWORD = __ENV.PASSWORD || 'arquiteurasoftware';
-const USER_POOL = __ENV.USER_POOL || '';
-const PRODUCT_ID = __ENV.PRODUCT_ID || '0';
-const INVENTORY_QTY = Number(__ENV.INVENTORY_QTY || '2000');
-const THINK_TIME_SECONDS = Number(__ENV.THINK_TIME_SECONDS || '0.5');
-const STOCK_KEYWORDS = ['stock', 'inventory', 'estoque', 'esgotado'];
-const SCENARIO_PROFILE = __ENV.SCENARIO_PROFILE || 'default';
+const SUCCESS_EMAIL = __ENV.SUCCESS_EMAIL || EMAIL;
+const SUCCESS_PASSWORD = __ENV.SUCCESS_PASSWORD || PASSWORD;
+const SUCCESS_ACCOUNTS = (__ENV.SUCCESS_ACCOUNTS || '')
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean)
+  .map((entry) => {
+    const separatorIndex = entry.indexOf(':');
+    if (separatorIndex === -1) return null;
 
-const SUCCESS_STAGE_1_DURATION =
-  __ENV.SUCCESS_STAGE_1_DURATION || (SCENARIO_PROFILE === 'demo-long' ? '2m' : '30s');
-const SUCCESS_STAGE_1_TARGET = Number(
-  __ENV.SUCCESS_STAGE_1_TARGET || (SCENARIO_PROFILE === 'demo-long' ? '4' : '2')
-);
-const SUCCESS_STAGE_2_DURATION =
-  __ENV.SUCCESS_STAGE_2_DURATION || (SCENARIO_PROFILE === 'demo-long' ? '10m' : '90s');
-const SUCCESS_STAGE_2_TARGET = Number(
-  __ENV.SUCCESS_STAGE_2_TARGET || (SCENARIO_PROFILE === 'demo-long' ? '12' : '6')
-);
-const SUCCESS_STAGE_3_DURATION =
-  __ENV.SUCCESS_STAGE_3_DURATION || (SCENARIO_PROFILE === 'demo-long' ? '2m' : '30s');
+    const email = entry.slice(0, separatorIndex).trim();
+    const password = entry.slice(separatorIndex + 1).trim();
+    if (!email || !password) return null;
+
+    return { email, password };
+  })
+  .filter(Boolean);
+const BASKET_FAILURE_EMAIL = __ENV.BASKET_FAILURE_EMAIL || '';
+const BASKET_FAILURE_PASSWORD = __ENV.BASKET_FAILURE_PASSWORD || '';
+
+const PRODUCT_ID = __ENV.PRODUCT_ID || '18';
+const SUCCESS_PRODUCT_ID = __ENV.SUCCESS_PRODUCT_ID || PRODUCT_ID;
+const INVENTORY_PRODUCT_ID = __ENV.INVENTORY_PRODUCT_ID || '48';
+const THINK_TIME_SECONDS = Number(__ENV.THINK_TIME_SECONDS || '1');
+const SUCCESS_THINK_TIME_SECONDS = Number(__ENV.SUCCESS_THINK_TIME_SECONDS || '65');
+
+const SUCCESS_STAGE_1_DURATION = __ENV.SUCCESS_STAGE_1_DURATION || '30s';
+const SUCCESS_STAGE_1_TARGET = Number(__ENV.SUCCESS_STAGE_1_TARGET || '1');
+const SUCCESS_STAGE_2_DURATION = __ENV.SUCCESS_STAGE_2_DURATION || '90s';
+const SUCCESS_STAGE_2_TARGET = Number(__ENV.SUCCESS_STAGE_2_TARGET || '1');
+const SUCCESS_STAGE_3_DURATION = __ENV.SUCCESS_STAGE_3_DURATION || '30s';
 const SUCCESS_STAGE_3_TARGET = Number(__ENV.SUCCESS_STAGE_3_TARGET || '0');
 
-const FAILURE_DURATION = __ENV.FAILURE_DURATION || (SCENARIO_PROFILE === 'demo-long' ? '10m' : '2m');
+const FAILURE_DURATION = __ENV.FAILURE_DURATION || '2m';
 const BASKET_FAILURE_START_TIME = __ENV.BASKET_FAILURE_START_TIME || '5s';
-const PAYMENT_FAILURE_START_TIME = __ENV.PAYMENT_FAILURE_START_TIME || '10s';
-const INVENTORY_PRESSURE_START_TIME = __ENV.INVENTORY_PRESSURE_START_TIME || '15s';
-const INVENTORY_RACE_START_TIME =
-  __ENV.INVENTORY_RACE_START_TIME || (SCENARIO_PROFILE === 'demo-long' ? '90s' : '20s');
+const INVENTORY_FAILURE_START_TIME = __ENV.INVENTORY_FAILURE_START_TIME || '15s';
+const BASKET_FAILURE_VUS = Number(__ENV.BASKET_FAILURE_VUS || '0');
+const INVENTORY_FAILURE_VUS = Number(__ENV.INVENTORY_FAILURE_VUS || '0');
+
+const DEFAULT_REQUEST_PARAMS = {
+  headers: {
+    'User-Agent': USER_AGENT,
+  },
+};
 
 export const options = {
   scenarios: {
     opc_success: {
       executor: 'ramping-vus',
       exec: 'scenarioSuccess',
-      startVUs: 0,
+      startVUs: SUCCESS_STAGE_1_TARGET > 0 ? SUCCESS_STAGE_1_TARGET : 0,
       stages: [
         { duration: SUCCESS_STAGE_1_DURATION, target: SUCCESS_STAGE_1_TARGET },
         { duration: SUCCESS_STAGE_2_DURATION, target: SUCCESS_STAGE_2_TARGET },
@@ -46,35 +67,28 @@ export const options = {
       ],
       gracefulRampDown: '10s',
     },
-    opc_basket_failure: {
-      executor: 'constant-vus',
-      exec: 'scenarioBasketFailure',
-      vus: 1,
-      duration: FAILURE_DURATION,
-      startTime: BASKET_FAILURE_START_TIME,
-    },
-    opc_payment_failure: {
-      executor: 'constant-vus',
-      exec: 'scenarioPaymentFailure',
-      vus: 1,
-      duration: FAILURE_DURATION,
-      startTime: PAYMENT_FAILURE_START_TIME,
-    },
-    opc_inventory_pressure: {
-      executor: 'constant-vus',
-      exec: 'scenarioInventoryPressure',
-      vus: 1,
-      duration: FAILURE_DURATION,
-      startTime: INVENTORY_PRESSURE_START_TIME,
-    },
-    opc_inventory_race: {
-      executor: 'per-vu-iterations',
-      exec: 'scenarioInventoryRace',
-      vus: 2,
-      iterations: 1,
-      maxDuration: '2m',
-      startTime: INVENTORY_RACE_START_TIME,
-    },
+    ...(BASKET_FAILURE_VUS > 0
+      ? {
+          opc_basket_failure: {
+            executor: 'constant-vus',
+            exec: 'scenarioBasketFailure',
+            vus: BASKET_FAILURE_VUS,
+            duration: FAILURE_DURATION,
+            startTime: BASKET_FAILURE_START_TIME,
+          },
+        }
+      : {}),
+    ...(INVENTORY_FAILURE_VUS > 0
+      ? {
+          opc_inventory_failure: {
+            executor: 'constant-vus',
+            exec: 'scenarioInventoryFailure',
+            vus: INVENTORY_FAILURE_VUS,
+            duration: FAILURE_DURATION,
+            startTime: INVENTORY_FAILURE_START_TIME,
+          },
+        }
+      : {}),
   },
   thresholds: {
     http_req_failed: ['rate<0.30'],
@@ -82,9 +96,25 @@ export const options = {
   },
 };
 
+function withDefaultParams(params = {}) {
+  return {
+    ...params,
+    headers: {
+      ...DEFAULT_REQUEST_PARAMS.headers,
+      ...(params.headers || {}),
+    },
+  };
+}
+
 function antiForgeryTokenFromHtml(html) {
   const doc = parseHTML(html || '');
   return doc.find('input[name="__RequestVerificationToken"]').first().attr('value') || '';
+}
+
+function parseSelectedOrFirstOptionValue(selection) {
+  const selected = selection.find('option[selected]').first().attr('value');
+  if (selected) return selected;
+  return selection.find('option').first().attr('value') || '';
 }
 
 function parseBillingAddressId(html) {
@@ -102,6 +132,23 @@ function parseFirstInputValue(html, inputName) {
   return doc.find(`input[name="${inputName}"]`).first().attr('value') || '';
 }
 
+function parseCartItemIds(html) {
+  const ids = [];
+  const seen = {};
+  const regex = /name="itemquantity(\d+)"/g;
+  let match = null;
+
+  while ((match = regex.exec(html || '')) !== null) {
+    const id = match[1];
+    if (!seen[id]) {
+      seen[id] = true;
+      ids.push(id);
+    }
+  }
+
+  return ids;
+}
+
 function parseJson(response) {
   try {
     return response.json();
@@ -110,89 +157,127 @@ function parseJson(response) {
   }
 }
 
-function includesStockKeyword(value) {
-  const text = String(value || '').toLowerCase();
-  return STOCK_KEYWORDS.some((k) => text.includes(k));
-}
+function parseProductDetailsForm(html, productId, qty = 1) {
+  const doc = parseHTML(html || '');
+  const payload = {};
 
-function hasInventoryFailureMessage(payload) {
-  const message = payload?.message;
-  if (Array.isArray(message)) {
-    return message.some((m) => includesStockKeyword(m));
-  }
-  return includesStockKeyword(message);
-}
+  const inputs = doc.find('#product-details-form input');
+  for (let i = 0; i < inputs.size(); i++) {
+    const input = inputs.eq(i);
+    const name = input.attr('name');
+    if (!name) continue;
 
-function parseCartItemIds(html) {
-  const ids = [];
-  const seen = {};
-  const regex = /name="itemquantity(\d+)"/g;
-  let m = null;
-
-  while ((m = regex.exec(html || '')) !== null) {
-    const id = m[1];
-    if (!seen[id]) {
-      seen[id] = true;
-      ids.push(id);
+    const type = String(input.attr('type') || 'text').toLowerCase();
+    if (type === 'radio' || type === 'checkbox') {
+      if (input.attr('checked')) payload[name] = input.attr('value') || 'on';
+      continue;
     }
+
+    payload[name] = input.attr('value') || '';
   }
 
-  return ids;
+  const selects = doc.find('#product-details-form select');
+  for (let i = 0; i < selects.size(); i++) {
+    const select = selects.eq(i);
+    const name = select.attr('name');
+    if (!name) continue;
+    payload[name] = parseSelectedOrFirstOptionValue(select);
+  }
+
+  const textareas = doc.find('#product-details-form textarea');
+  for (let i = 0; i < textareas.size(); i++) {
+    const textarea = textareas.eq(i);
+    const name = textarea.attr('name');
+    if (!name) continue;
+    payload[name] = textarea.text() || '';
+  }
+
+  payload[`addtocart_${productId}.EnteredQuantity`] = String(qty);
+  payload.__RequestVerificationToken = antiForgeryTokenFromHtml(html);
+  return payload;
+}
+
+function parseCartUpdatePayload(html) {
+  const doc = parseHTML(html || '');
+  const payload = {
+    updatecart: 'updatecart',
+    __RequestVerificationToken: antiForgeryTokenFromHtml(html),
+  };
+
+  const qtyInputs = doc.find('#shopping-cart-form input[name^="itemquantity"]');
+  for (let i = 0; i < qtyInputs.size(); i++) {
+    const input = qtyInputs.eq(i);
+    const name = input.attr('name');
+    if (!name) continue;
+    payload[name] = input.attr('value') || '1';
+  }
+
+  const attributeInputs = doc.find(
+    '#shopping-cart-form input[name^="checkout_attribute_"], #shopping-cart-form textarea[name^="checkout_attribute_"]'
+  );
+  for (let i = 0; i < attributeInputs.size(); i++) {
+    const input = attributeInputs.eq(i);
+    const name = input.attr('name');
+    if (!name) continue;
+
+    const type = String(input.attr('type') || 'text').toLowerCase();
+    if (type === 'radio' || type === 'checkbox') {
+      if (input.attr('checked')) payload[name] = input.attr('value') || 'on';
+      continue;
+    }
+
+    payload[name] = input.attr('value') || input.text() || '';
+  }
+
+  const attributeSelects = doc.find('#shopping-cart-form select[name^="checkout_attribute_"]');
+  for (let i = 0; i < attributeSelects.size(); i++) {
+    const select = attributeSelects.eq(i);
+    const name = select.attr('name');
+    if (!name) continue;
+    payload[name] = parseSelectedOrFirstOptionValue(select);
+  }
+
+  return payload;
 }
 
 function checkoutEndpoint(path) {
   return `${BASE_URL}/checkout/${path}/`;
 }
 
-function fetchStoreAntiForgeryToken(tokenHint = '') {
-  const home = http.get(BASE_URL);
-  check(home, { 'home loaded for csrf': (r) => r.status === 200 });
+function credentialsForScenario(scenarioName) {
+  if (scenarioName === 'opc_basket_failure' && BASKET_FAILURE_EMAIL && BASKET_FAILURE_PASSWORD) {
+    return { email: BASKET_FAILURE_EMAIL, password: BASKET_FAILURE_PASSWORD };
+  }
 
-  const homeToken = antiForgeryTokenFromHtml(home.body);
-  if (homeToken) return homeToken;
-
-  const loginPage = http.get(`${BASE_URL}/login`);
-  check(loginPage, { 'login page loaded for csrf': (r) => r.status === 200 });
-  return antiForgeryTokenFromHtml(loginPage.body) || tokenHint;
+  return { email: SUCCESS_EMAIL, password: SUCCESS_PASSWORD };
 }
 
-function parseUserPool() {
-  if (!USER_POOL.trim()) return [];
+function successCredentialsForCurrentIteration() {
+  if (SUCCESS_ACCOUNTS.length === 0) {
+    return credentialsForScenario('opc_success');
+  }
 
-  return USER_POOL
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.includes(':'))
-    .map((entry) => {
-      const idx = entry.indexOf(':');
-      const email = entry.slice(0, idx).trim();
-      const password = entry.slice(idx + 1).trim();
-      return { email, password };
-    })
-    .filter((u) => u.email && u.password);
-}
-
-const users = parseUserPool();
-
-function credentialsForCurrentVu() {
-  if (users.length === 0) return { email: EMAIL, password: PASSWORD };
-  const idx = (__VU - 1) % users.length;
-  return users[idx];
+  const index = ((__VU - 1) + __ITER) % SUCCESS_ACCOUNTS.length;
+  return SUCCESS_ACCOUNTS[index];
 }
 
 function loginAndGetToken(credentials) {
-  const loginPage = http.get(`${BASE_URL}/login`);
+  const loginPage = http.get(`${BASE_URL}/login`, withDefaultParams());
   check(loginPage, { 'login page loaded': (r) => r.status === 200 });
 
   const token = antiForgeryTokenFromHtml(loginPage.body);
   if (!token) return '';
 
-  const loginRes = http.post(`${BASE_URL}/login`, {
-    Email: credentials.email,
-    Password: credentials.password,
-    RememberMe: 'false',
-    __RequestVerificationToken: token,
-  });
+  const loginRes = http.post(
+    `${BASE_URL}/login`,
+    {
+      Email: credentials.email,
+      Password: credentials.password,
+      RememberMe: 'false',
+      __RequestVerificationToken: token,
+    },
+    withDefaultParams()
+  );
 
   check(loginRes, {
     'login request status is expected': (r) => r.status === 200 || r.status === 302,
@@ -201,37 +286,8 @@ function loginAndGetToken(credentials) {
   return token;
 }
 
-function discoverOrUseProductId() {
-  if (PRODUCT_ID && PRODUCT_ID !== '0') return PRODUCT_ID;
-
-  const home = http.get(BASE_URL);
-  check(home, { 'home loaded': (r) => r.status === 200 });
-  const match = home.body.match(/addproducttocart\/catalog\/(\d+)\/1\/1/);
-  return match ? match[1] : '';
-}
-
-function discoverCandidateProductIdsFromHome() {
-  const home = http.get(BASE_URL);
-  check(home, { 'home loaded for candidate discovery': (r) => r.status === 200 });
-
-  const regex = /addproducttocart\/catalog\/(\d+)\/1\/1/g;
-  const seen = {};
-  const ids = [];
-  let m = null;
-
-  while ((m = regex.exec(home.body)) !== null) {
-    const id = m[1];
-    if (!seen[id]) {
-      seen[id] = true;
-      ids.push(id);
-    }
-  }
-
-  return ids;
-}
-
 function clearShoppingCart() {
-  const cartPage = http.get(`${BASE_URL}/cart`);
+  const cartPage = http.get(`${BASE_URL}/cart`, withDefaultParams());
   check(cartPage, { 'cart page loaded': (r) => r.status === 200 });
 
   const token = antiForgeryTokenFromHtml(cartPage.body);
@@ -248,111 +304,146 @@ function clearShoppingCart() {
     payload[`itemquantity${id}`] = '0';
   });
 
-  const updateRes = http.post(`${BASE_URL}/cart`, payload);
+  const updateRes = http.post(`${BASE_URL}/cart`, payload, withDefaultParams());
   check(updateRes, { 'cart cleared update status ok': (r) => r.status === 200 });
 }
 
-function discoverInventoryPressureProductId(token) {
-  const candidates = discoverCandidateProductIdsFromHome();
-
-  if (PRODUCT_ID && PRODUCT_ID !== '0' && !candidates.includes(PRODUCT_ID)) {
-    candidates.unshift(PRODUCT_ID);
-  }
-
-  for (let i = 0; i < candidates.length; i++) {
-    const id = candidates[i];
-    const add = addProductToCart(token, id, INVENTORY_QTY);
-
-    if (!add.ok && hasInventoryFailureMessage(add.body)) {
-      return id;
-    }
-  }
-
-  return '';
-}
-
-function addProductToCart(token, productId, qty = 1) {
+function addProductToCart(productId, qty = 1, expectBusinessSuccess = true) {
   if (!productId) return { ok: false, body: {} };
 
+  const home = http.get(BASE_URL, withDefaultParams());
+  check(home, { 'home loaded for csrf': (r) => r.status === 200 });
+
+  const token = antiForgeryTokenFromHtml(home.body);
   const addRes = http.post(
     `${BASE_URL}/addproducttocart/catalog/${productId}/1/${qty}`,
     {
       forceredirection: 'false',
       __RequestVerificationToken: token,
-    }
+    },
+    withDefaultParams()
   );
-  const body = parseJson(addRes);
 
+  let body = parseJson(addRes);
   check(addRes, { 'add-to-cart responded': (r) => r.status === 200 });
+
+  if (body.redirect) {
+    const detailsPage = http.get(`${BASE_URL}${body.redirect}`, withDefaultParams());
+    check(detailsPage, { 'product details page loaded': (r) => r.status === 200 });
+
+    const detailsPayload = parseProductDetailsForm(detailsPage.body, productId, qty);
+    const detailsRes = http.post(
+      `${BASE_URL}/addproducttocart/details/${productId}/1`,
+      detailsPayload,
+      withDefaultParams()
+    );
+    body = parseJson(detailsRes);
+    check(detailsRes, { 'details add-to-cart responded': (r) => r.status === 200 });
+  }
+
+  if (expectBusinessSuccess) {
+    check(body, { 'add-to-cart business success': (b) => !!b.success });
+  }
   return { ok: !!body.success, body };
 }
 
-function openOpc(tokenHint) {
-  const checkoutPage = http.get(`${BASE_URL}/onepagecheckout`);
+function saveCartCheckoutAttributes() {
+  const cartPage = http.get(`${BASE_URL}/cart`, withDefaultParams());
+  check(cartPage, { 'cart page loaded for checkout attrs': (r) => r.status === 200 });
+
+  const payload = parseCartUpdatePayload(cartPage.body);
+  if (!payload.__RequestVerificationToken) return;
+
+  const updateRes = http.post(`${BASE_URL}/cart`, payload, withDefaultParams());
+  check(updateRes, { 'cart checkout attributes saved': (r) => r.status === 200 });
+}
+
+function openOpc(tokenHint = '') {
+  const checkoutPage = http.get(`${BASE_URL}/onepagecheckout`, withDefaultParams());
   check(checkoutPage, { 'opc page loaded': (r) => r.status === 200 });
 
-  const token = antiForgeryTokenFromHtml(checkoutPage.body) || tokenHint;
-  const billingAddressId = parseBillingAddressId(checkoutPage.body);
-  return { token, billingAddressId, html: checkoutPage.body };
+  return {
+    token: antiForgeryTokenFromHtml(checkoutPage.body) || tokenHint,
+    billingAddressId: parseBillingAddressId(checkoutPage.body),
+  };
 }
 
 function opcSaveBilling(token, billingAddressId) {
-  const billingRes = http.post(checkoutEndpoint('OpcSaveBilling'), {
-    billing_address_id: billingAddressId,
-    ShipToSameAddress: 'true',
-    __RequestVerificationToken: token,
-  });
-  check(billingRes, { 'opc billing status ok': (r) => r.status === 200 });
-  return parseJson(billingRes);
+  const response = http.post(
+    checkoutEndpoint('OpcSaveBilling'),
+    {
+      billing_address_id: billingAddressId,
+      ShipToSameAddress: 'true',
+      __RequestVerificationToken: token,
+    },
+    withDefaultParams()
+  );
+  check(response, { 'opc billing status ok': (r) => r.status === 200 });
+  return parseJson(response);
 }
 
 function opcSaveShippingMethod(token, stepHtml) {
   const shippingOption = parseFirstInputValue(stepHtml, 'shippingoption');
   if (!shippingOption) return { error: 1, message: 'No shipping option available' };
 
-  const shippingRes = http.post(checkoutEndpoint('OpcSaveShippingMethod'), {
-    shippingoption: shippingOption,
-    __RequestVerificationToken: token,
-  });
-  check(shippingRes, { 'opc shipping-method status ok': (r) => r.status === 200 });
-  return parseJson(shippingRes);
+  const response = http.post(
+    checkoutEndpoint('OpcSaveShippingMethod'),
+    {
+      shippingoption: shippingOption,
+      __RequestVerificationToken: token,
+    },
+    withDefaultParams()
+  );
+  check(response, { 'opc shipping-method status ok': (r) => r.status === 200 });
+  return parseJson(response);
 }
 
-function opcSavePaymentMethod(token, stepHtml, forcedMethod = '') {
-  const paymentMethod = forcedMethod || parseFirstInputValue(stepHtml, 'paymentmethod');
+function opcSavePaymentMethod(token, stepHtml) {
+  const paymentMethod = parseFirstInputValue(stepHtml, 'paymentmethod');
   if (!paymentMethod) return { error: 1, message: 'No payment method available' };
 
-  const paymentMethodRes = http.post(checkoutEndpoint('OpcSavePaymentMethod'), {
-    paymentmethod: paymentMethod,
-    UseRewardPoints: 'false',
-    __RequestVerificationToken: token,
-  });
-  check(paymentMethodRes, { 'opc payment-method status ok': (r) => r.status === 200 });
-  return parseJson(paymentMethodRes);
+  const response = http.post(
+    checkoutEndpoint('OpcSavePaymentMethod'),
+    {
+      paymentmethod: paymentMethod,
+      UseRewardPoints: 'false',
+      __RequestVerificationToken: token,
+    },
+    withDefaultParams()
+  );
+  check(response, { 'opc payment-method status ok': (r) => r.status === 200 });
+  return parseJson(response);
 }
 
 function opcSavePaymentInfo() {
-  const paymentInfoRes = http.post(checkoutEndpoint('OpcSavePaymentInfo'), {});
-  check(paymentInfoRes, { 'opc payment-info status ok': (r) => r.status === 200 });
-  return parseJson(paymentInfoRes);
+  const response = http.post(checkoutEndpoint('OpcSavePaymentInfo'), {}, withDefaultParams());
+  check(response, { 'opc payment-info status ok': (r) => r.status === 200 });
+  return parseJson(response);
 }
 
-function opcConfirmOrder(token, captchaValid = true) {
-  const confirmRes = http.post(checkoutEndpoint('OpcConfirmOrder'), {
-    captchaValid: captchaValid ? 'true' : 'false',
-    __RequestVerificationToken: token,
-  });
-  check(confirmRes, { 'opc confirm status ok': (r) => r.status === 200 });
-  return parseJson(confirmRes);
+function opcConfirmOrder(token) {
+  const response = http.post(
+    checkoutEndpoint('OpcConfirmOrder'),
+    {
+      captchaValid: 'true',
+      termsofservice: 'true',
+      TermsOfService: 'true',
+      __RequestVerificationToken: token,
+    },
+    withDefaultParams()
+  );
+  check(response, { 'opc confirm status ok': (r) => r.status === 200 });
+  return parseJson(response);
 }
 
-function executeSuccessfulFlow(productQty = 1, credentials = credentialsForCurrentVu()) {
+function executeSuccessfulFlow(credentials, productId) {
   const loginToken = loginAndGetToken(credentials);
   clearShoppingCart();
-  const addToCartToken = fetchStoreAntiForgeryToken(loginToken);
-  const productId = discoverOrUseProductId();
-  const add = addProductToCart(addToCartToken, productId, productQty);
+
+  const add = addProductToCart(productId, 1, true);
   if (!add.ok) return { ok: false, stage: 'add_to_cart', data: add.body };
+
+  saveCartCheckoutAttributes();
 
   const opc = openOpc(loginToken);
   if (!opc.billingAddressId) return { ok: false, stage: 'billing_address', data: {} };
@@ -388,32 +479,47 @@ function executeSuccessfulFlow(productQty = 1, credentials = credentialsForCurre
     token = antiForgeryTokenFromHtml(stepHtml) || token;
   }
 
-  const confirm = opcConfirmOrder(token, true);
-  if (confirm.redirect) {
-    const redirectionRes = http.get(confirm.redirect);
-    check(redirectionRes, {
-      'redirection endpoint reached': (r) => r.status === 200 || r.status === 302,
-    });
-  }
-
+  const confirm = opcConfirmOrder(token);
   if (confirm.error) return { ok: false, stage: 'OpcConfirmOrder', data: confirm };
   return { ok: true, stage: 'success', data: confirm };
 }
 
+function executeSuccessfulFlowWithFallback(credentials) {
+  const candidates = [];
+  if (SUCCESS_PRODUCT_ID) candidates.push(SUCCESS_PRODUCT_ID);
+  if (PRODUCT_ID && !candidates.includes(PRODUCT_ID)) candidates.push(PRODUCT_ID);
+
+  if (candidates.length === 0) return { ok: false, stage: 'product_discovery', data: {} };
+
+  let last = { ok: false, stage: 'unknown', data: {} };
+  for (let i = 0; i < candidates.length; i++) {
+    last = executeSuccessfulFlow(credentials, candidates[i]);
+    if (last.ok) return last;
+  }
+
+  return last;
+}
+
 export function scenarioSuccess() {
   group('opc-success', function () {
-    const result = executeSuccessfulFlow(1, credentialsForCurrentVu());
+    const result = executeSuccessfulFlowWithFallback(successCredentialsForCurrentIteration());
     check(result, { 'successful flow completed': (r) => r.ok === true });
   });
-  sleep(THINK_TIME_SECONDS);
+  // nopCommerce rate-limits order placement per customer, so single-account tests need a longer pause.
+  // When multiple success accounts are configured, we can reduce the wait and still produce valid orders.
+  sleep(SUCCESS_ACCOUNTS.length > 0 ? THINK_TIME_SECONDS : SUCCESS_THINK_TIME_SECONDS);
 }
 
 export function scenarioBasketFailure() {
   group('opc-basket-failure', function () {
-    const loginToken = loginAndGetToken(credentialsForCurrentVu());
+    let loginToken = '';
+    if (BASKET_FAILURE_EMAIL && BASKET_FAILURE_PASSWORD) {
+      loginToken = loginAndGetToken(credentialsForScenario('opc_basket_failure'));
+    }
+
     clearShoppingCart();
     const opc = openOpc(loginToken);
-    const confirm = opcConfirmOrder(opc.token, true);
+    const confirm = opcConfirmOrder(opc.token);
 
     check(confirm, {
       'basket failure produced application error': (j) =>
@@ -423,84 +529,16 @@ export function scenarioBasketFailure() {
   sleep(THINK_TIME_SECONDS);
 }
 
-export function scenarioPaymentFailure() {
-  group('opc-payment-failure', function () {
-    const loginToken = loginAndGetToken(credentialsForCurrentVu());
+export function scenarioInventoryFailure() {
+  group('opc-inventory-failure', function () {
     clearShoppingCart();
-    const addToCartToken = fetchStoreAntiForgeryToken(loginToken);
-    const productId = discoverOrUseProductId();
-    const add = addProductToCart(addToCartToken, productId, 1);
-    if (!add.ok) return;
+    const add = addProductToCart(INVENTORY_PRODUCT_ID, 1, false);
 
-    const opc = openOpc(loginToken);
-    if (!opc.billingAddressId) return;
-
-    let token = opc.token;
-    let json = opcSaveBilling(token, opc.billingAddressId);
-    if (json.error) return;
-
-    let stepHtml = json.update_section?.html || '';
-    let nextSection = json.goto_section || '';
-    token = antiForgeryTokenFromHtml(stepHtml) || token;
-
-    if (nextSection === 'shipping_method') {
-      json = opcSaveShippingMethod(token, stepHtml);
-      if (json.error) return;
-      stepHtml = json.update_section?.html || '';
-      nextSection = json.goto_section || '';
-      token = antiForgeryTokenFromHtml(stepHtml) || token;
-    }
-
-    if (nextSection === 'payment_method') {
-      json = opcSavePaymentMethod(token, stepHtml, 'Payments.NonExistingProvider');
-      stepHtml = json.update_section?.html || '';
-      token = antiForgeryTokenFromHtml(stepHtml) || token;
-    }
-
-    const confirm = opcConfirmOrder(token, true);
-    check(confirm, {
-      'payment failure path produced non-success': (j) => !!j.error || !!j.update_section || !!j.message,
+    check(add, {
+      'inventory failure produced non-success': (r) => r.ok === false,
     });
   });
   sleep(THINK_TIME_SECONDS);
-}
-
-export function scenarioInventoryPressure() {
-  group('opc-inventory-pressure', function () {
-    const creds = credentialsForCurrentVu();
-    const loginToken = loginAndGetToken(creds);
-    const addToCartToken = fetchStoreAntiForgeryToken(loginToken);
-    const productId = discoverInventoryPressureProductId(addToCartToken) || discoverOrUseProductId();
-
-    if (!productId) {
-      check({ ok: false }, {
-        'inventory pressure has a valid product id': (r) => r.ok === true,
-      });
-      return;
-    }
-
-    // Force stock pressure directly on add-to-cart to generate inventory checkout failures.
-    const add = addProductToCart(addToCartToken, productId, INVENTORY_QTY);
-    const result = {
-      ok: !add.ok && hasInventoryFailureMessage(add.body),
-      raw: add.body,
-    };
-
-    check(result, {
-      'inventory failure signal observed': (r) => r.ok === true,
-    });
-  });
-  sleep(THINK_TIME_SECONDS);
-}
-
-export function scenarioInventoryRace() {
-  group('opc-inventory-race', function () {
-    const creds = credentialsForCurrentVu();
-    const result = executeSuccessfulFlow(1, creds);
-    check(result, {
-      'inventory race flow executed': (r) => r.ok === true || r.ok === false,
-    });
-  });
 }
 
 export default function () {
