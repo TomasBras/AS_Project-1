@@ -85,6 +85,11 @@ dotnet run --project src/Presentation/Nop.Web/Nop.Web.csproj
 Store URL:
 - `http://localhost:5000`
 
+Tracing notes:
+- automatic spans: ASP.NET Core, SQL client, outbound HTTP
+- custom business spans: `checkout.place_order`, `checkout.payment.post_process`, `checkout.payment.redirection_complete`, `event.publish`, `event.consume`
+- sanitization: exported spans pass through a processor that removes potentially sensitive attributes before they leave the process
+
 ---
 
 ## 5) Selected Flow Diagram
@@ -104,54 +109,85 @@ flowchart LR
 
 ## 5.1) Observability Architecture Diagram
 
-```mermaid
-flowchart LR
-  U["User / Browser"] --> W["Nop.Web (ASP.NET Core)"]
-  W --> S["Nop.Services (Checkout orchestration)"]
-  S --> D["Nop.Data / SQL Server"]
-
-  W -. "traces + metrics (OTLP)" .-> C["OpenTelemetry Collector :4317"]
-  C --> P["Prometheus"]
-  C --> J["Jaeger"]
-  P --> G["Grafana (dashboards)"]
-
-  LT["k6 load test"] --> W
-```
+![Observability architecture](artifacts/architecture.png)
 
 ---
 
 ## 6) Run Load Test (k6)
 
-The script generates mixed scenarios (success + controlled failures) to populate checkout, payment, drop-off, basket, and inventory metrics.
+The script drives three checkout scenarios:
+- `opc_success`
+- `opc_basket_failure`
+- `opc_inventory_failure`
 
-From repository root:
+Recommended product setup:
+- success path: `SUCCESS_PRODUCT_ID=18`
+- inventory failure path: `INVENTORY_PRODUCT_ID=48`
+
+Quick validation run:
 
 ```bash
 BASE_URL=http://localhost:5000 \
-EMAIL=admin@yourStore.com \
-PASSWORD='arquiteurasoftware' \
-PRODUCT_ID=48 \
-INVENTORY_QTY=2000 \
+SUCCESS_PRODUCT_ID=18 \
+SUCCESS_STAGE_1_DURATION=20s \
+SUCCESS_STAGE_1_TARGET=1 \
+SUCCESS_STAGE_2_DURATION=40s \
+SUCCESS_STAGE_2_TARGET=1 \
+SUCCESS_STAGE_3_DURATION=20s \
+SUCCESS_STAGE_3_TARGET=0 \
+BASKET_FAILURE_VUS=0 \
+INVENTORY_FAILURE_VUS=0 \
+k6 run load-tests/checkout-opc.js
+```
+
+Mixed demo run used to populate both `success` and `failed` signals:
+
+```bash
+BASE_URL=http://localhost:5000 \
+SUCCESS_PRODUCT_ID=18 \
+SUCCESS_STAGE_1_DURATION=30s \
+SUCCESS_STAGE_1_TARGET=1 \
+SUCCESS_STAGE_2_DURATION=4m \
+SUCCESS_STAGE_2_TARGET=1 \
+SUCCESS_STAGE_3_DURATION=30s \
+SUCCESS_STAGE_3_TARGET=0 \
+BASKET_FAILURE_VUS=1 \
+BASKET_FAILURE_START_TIME=4m \
+INVENTORY_FAILURE_VUS=1 \
+INVENTORY_FAILURE_START_TIME=4m15s \
+FAILURE_DURATION=45s \
+INVENTORY_PRODUCT_ID=48 \
+k6 run load-tests/checkout-opc.js
+```
+
+5-minute presentation run with higher request volume:
+
+```bash
+BASE_URL=http://localhost:5000 \
+SUCCESS_PRODUCT_ID=18 \
+SUCCESS_STAGE_1_DURATION=30s \
+SUCCESS_STAGE_1_TARGET=1 \
+SUCCESS_STAGE_2_DURATION=4m \
+SUCCESS_STAGE_2_TARGET=2 \
+SUCCESS_STAGE_3_DURATION=30s \
+SUCCESS_STAGE_3_TARGET=0 \
+THINK_TIME_SECONDS=1 \
+SUCCESS_THINK_TIME_SECONDS=1 \
+BASKET_FAILURE_VUS=2 \
+BASKET_FAILURE_START_TIME=3m30s \
+INVENTORY_FAILURE_VUS=1 \
+INVENTORY_FAILURE_START_TIME=4m10s \
+FAILURE_DURATION=50s \
+INVENTORY_PRODUCT_ID=48 \
 k6 run load-tests/checkout-opc.js
 ```
 
 Notes:
-- `PRODUCT_ID=0` tries to auto-discover a simple product from homepage.
-- For reproducible runs, set a known simple product ID explicitly.
-- For deterministic inventory failures, use a product with `Manage stock = true`, `Backorders = No backorders`, and low stock.
-- `SCENARIO_PROFILE=demo-long` enables a longer run profile (higher duration and sustained traffic) for richer dashboard signal.
-
-Long-run example:
-
-```bash
-BASE_URL=http://localhost:5000 \
-EMAIL=admin@yourStore.com \
-PASSWORD='arquiteurasoftware' \
-PRODUCT_ID=48 \
-INVENTORY_QTY=5000 \
-SCENARIO_PROFILE=demo-long \
-k6 run load-tests/checkout-opc.js
-```
+- `SUCCESS_THINK_TIME_SECONDS=65` is the default and helps respect nopCommerce order-placement cooldowns during the success scenario.
+- For the presentation setup used in this repository, `OrderSettings.MinimumOrderPlacementInterval` was set to `0` so the success scenario can generate repeated successful checkouts within a short demo window.
+- `SUCCESS_ACCOUNTS` remains optional if you prefer to distribute successful orders across multiple prepared users instead of relaxing the placement interval.
+- `BASKET_FAILURE_EMAIL` and `BASKET_FAILURE_PASSWORD` are optional; the basket failure scenario can run anonymously.
+- `INVENTORY_PRODUCT_ID` should point to a simple out-of-stock product without required attributes. In this repository, `48` is the validated choice.
 
 ---
 
@@ -186,7 +222,7 @@ sum by (provider, reason_code) (increase(payment_failures_total[5m]))
 ```
 Shows payment failures by normalized reason code in the last 5 minutes.
 
-Interpretation note for demo/evaluation: if payment queries return `0` (or payment panels show `No data`) while checkout/basket/inventory metrics are active, this is expected in this repository setup because checkout uses an offline/local payment path (no external gateway call).
+Interpretation note for demo/evaluation: in this repository setup, checkout uses an offline/local payment path (no external gateway call). Because of that, `payment_failures_total` can legitimately remain `0` or appear as `No data`, while `payment_attempts_total` and `payment_latency_seconds` should still show data whenever the success scenario runs.
 
 ---
 

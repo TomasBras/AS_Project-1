@@ -1,4 +1,4 @@
-# Architecture Analysis (Before Instrumentation)
+# Architecture Analysis and Instrumentation Rationale
 
 ## 1) Layer Organization and Dependency Rules
 
@@ -214,8 +214,8 @@ Why this is the right trade-off:
 - **low risk:** no change to business semantics,
 - **high diagnostic value:** reveals hidden fan-out cost and partial-failure patterns.
 
-Implementation note for this assignment: this analysis explains why `EventPublisher` is a high-value boundary.  
-In the delivered code, instrumentation was kept at checkout/controller + host boundaries (plus SQL/HTTP built-in instrumentation) to minimize behavioral risk and keep changes surgical.
+Implementation note for this assignment: the delivered code now instruments `EventPublisher` directly with spans for publish and per-consumer execution, while still keeping the change at the boundary rather than inside each business service.  
+This kept the approach surgical but made dynamic fan-out visible in traces.
 
 In short, `IEventPublisher` is not just an implementation detail; it is a runtime coupling point where architectural decoupling turns into operational complexity.
 
@@ -459,10 +459,10 @@ sum(rate(checkout_duration_seconds_sum[5m])) / sum(rate(checkout_duration_second
 ## Dashboard Row 2: Payment Reliability
 
 Environment note (important for interpretation): in this assignment setup, nopCommerce is using an offline/local payment method (for example `Payments.CheckMoneyOrder`) and no external gateway (Stripe/PayPal) is called during checkout.  
-Because of that, provider-dependent metrics such as `payment_failures_total` and `payment_latency_seconds` can show limited variability (often close to zero). This is expected behavior in this environment, not an instrumentation gap.
+Because of that, provider-dependent metrics such as `payment_failures_total` can legitimately remain at `0` or show limited variability. This is expected behavior in this environment, not an instrumentation gap.
 
-Demo note (important): in this repository demo, it is valid for the three payment panels to appear as `No data` in some runs/time windows.  
-This should be presented as an environment characteristic (offline/local payment path), not as missing instrumentation.
+Demo note (important): in this repository demo, `payment_attempts_total` and `payment_latency_seconds` should still show data whenever the success scenario runs, while `payment_failures_total` may remain `0` or `No data` for some runs/time windows.  
+This should be presented as an environment characteristic of the offline/local payment path, not as missing instrumentation.
 
 These metrics were kept intentionally because they are production-readiness signals: once a real gateway is enabled, the same dashboard immediately shows provider-specific latency degradation and failure patterns.  
 For the live demo in this repository, the strongest actionable signals are checkout-level metrics (`checkout_attempts_total`, error rate, p95 duration, and drop-off reasons), which do change clearly under load and controlled failure scenarios.

@@ -44,8 +44,10 @@ Implemented boundaries:
 
 1. HTTP ingress/orchestration (`CheckoutController` confirmation endpoints),
 2. checkout outcome + duration metrics (`CheckoutTelemetry`),
-3. SQL visibility through OpenTelemetry SQL client instrumentation,
-4. payment, basket, inventory, and drop-off counters at decision points.
+3. explicit business spans around `PlaceOrderAsync` and payment post-processing,
+4. event dispatch spans in `EventPublisher`,
+5. SQL visibility through OpenTelemetry SQL client instrumentation,
+6. payment, basket, inventory, and drop-off counters at decision points.
 
 Why this was the right choice:
 
@@ -64,16 +66,23 @@ This aligns directly with the structural rationale in `ARCHITECTURE.md` section 
 
 - Added a focused telemetry helper:  
   [CheckoutTelemetry.cs](/home/tomasbras/Desktop/AS/Project/AS_Project-1/src/Presentation/Nop.Web/Infrastructure/Observability/CheckoutTelemetry.cs)
+- Added a shared `ActivitySource` for business spans across web and service boundaries:  
+  [NopTelemetry.cs](/home/tomasbras/Desktop/AS/Project/AS_Project-1/src/Libraries/Nop.Core/Observability/NopTelemetry.cs)
 - Centralized OTel wiring and meter registration in:  
   [Program.cs](/home/tomasbras/Desktop/AS/Project/AS_Project-1/src/Presentation/Nop.Web/Program.cs)
-- Added outcome/latency/failure instrumentation in checkout controller paths.
+- Added explicit spans around checkout placement and payment post-processing in controller paths.
+- Added publish/consumer spans in:  
+  [EventPublisher.cs](/home/tomasbras/Desktop/AS/Project/AS_Project-1/src/Libraries/Nop.Services/Events/EventPublisher.cs)
+- Added a sanitizing span processor before export:  
+  [SensitiveDataSanitizingProcessor.cs](/home/tomasbras/Desktop/AS/Project/AS_Project-1/src/Presentation/Nop.Web/Infrastructure/Observability/SensitiveDataSanitizingProcessor.cs)
 - Added package/config support in web host project where required.
 
 ### Why these changes were necessary
 
 - Built-in framework telemetry alone does not express checkout business outcomes (`reason_code`, domain-specific failures).
+- Built-in framework telemetry alone does not expose service-boundary business steps clearly enough for architectural analysis.
 - Assignment requires meaningful custom metrics beyond request count.
-- Controller boundary is the least risky place to classify business result for this flow.
+- Controller boundary is the least risky place to classify business result for this flow, and `EventPublisher` is the least risky place to expose runtime fan-out.
 
 ### How impact was minimized
 
@@ -81,7 +90,8 @@ This aligns directly with the structural rationale in `ARCHITECTURE.md` section 
 - No behavioral change in payment plugins.
 - No change to event bus semantics.
 - No high-cardinality labels.
-- No PII in tags/attributes.
+- No raw exception messages in spans.
+- Central sanitization before export for potentially sensitive attributes.
 
 This kept edits auditable and reduced blast radius.
 
@@ -90,6 +100,7 @@ This kept edits auditable and reduced blast radius.
 ## 4) Sensitive data and telemetry governance
 
 Telemetry tags were restricted to low-cardinality technical dimensions (for example `flow`, `result`, `reason_code`, `provider`, `method`, `payment_method`).
+Additionally, exported spans pass through a sanitizing processor that removes attributes with sensitive fragments such as `email`, `password`, `token`, `card`, `address`, and `exception.message`.
 
 Explicitly excluded:
 
@@ -104,7 +115,7 @@ This was a conscious privacy and operability trade-off: enough context to troubl
 
 ## 5) What I would change next (and cost)
 
-If evolving architecture beyond assignment scope, I would add a small observability layer around event dispatch and major service orchestration steps:
+If evolving architecture beyond assignment scope, I would deepen the observability layer that now exists around event dispatch and major service orchestration steps:
 
 - standardized activity naming for domain operations,
 - consistent success/failure taxonomy across checkout modes,
@@ -122,13 +133,13 @@ Expected cost:
 - regression testing effort in checkout/payment branches,
 - governance overhead for naming/tag conventions.
 
-Given assignment constraints, this was deferred to avoid unnecessary risk.
+Given assignment constraints, deeper service-by-service tracing was deferred to avoid unnecessary risk.
 
 ---
 
 ## 6) Final critique summary
 
 nopCommerce offers strong instrumentation points at architectural boundaries, but runtime dynamism (plugins, event fan-out, checkout branching) introduces operational behavior that is hard to infer statically.  
-Given that reality, the most defensible decision was boundary-first instrumentation: central OTel setup in the host, focused checkout metrics at controller decision points, and automatic HTTP/SQL tracing for end-to-end visibility.
+Given that reality, the most defensible decision was boundary-first instrumentation: central OTel setup in the host, focused checkout metrics at controller decision points, explicit spans for `PlaceOrderAsync` and payment processing, event-dispatch tracing in `EventPublisher`, and automatic HTTP/SQL tracing for end-to-end visibility.
 
 This trade-off delivered actionable observability without architectural churn: operators can localize failures (basket, inventory, payment, latency), telemetry remains privacy-safe (no PII tags), and the solution stays maintainable for future extension in an inherited production codebase.
