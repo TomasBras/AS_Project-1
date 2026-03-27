@@ -1,5 +1,9 @@
 # Assignment 01 - Observability in the Wild
 
+| Student | NMEC |
+| --- | --- |
+| Tomás Rafael Marques Brás | 112665 |
+
 OpenTelemetry instrumentation for nopCommerce, focused on the flow:
 
 **Customer places an order (Basket -> Order -> Payment -> Inventory)**.
